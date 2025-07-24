@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime
 from nand_driver import MT29F4G08ABADAWP
 
 def hex_to_int(hex_str: str) -> int:
@@ -20,7 +21,8 @@ def format_time(seconds):
 
 def erase_all_blocks(nand, total_blocks=4096):  # 4Gb = 4096 blocks
     """전체 블록 삭제"""
-    print("전체 블록 삭제 시작...")
+    start_datetime = datetime.now()
+    print(f"\n=== 블록 삭제 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
     start_time = time.time()
     
     for block in range(total_blocks):
@@ -56,7 +58,9 @@ def program_nand():
     total_files = len(files)
     processed_files = 0
     
-    print(f"프로그래밍 시작 (총 {total_files}개 파일)")
+    start_datetime = datetime.now()
+    print(f"\n=== 프로그래밍 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
+    print(f"총 {total_files}개 파일 프로그래밍 예정")
     start_time = time.time()
     
     for filename in files:

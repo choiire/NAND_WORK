@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime
 from nand_driver import MT29F4G08ABADAWP
 
 def format_time(seconds):
@@ -26,7 +27,9 @@ def verify_nand():
     total_size = len(input_data)
     pages_to_verify = total_size // 2048  # 2KB 단위로 나누기
     
-    print(f"검증 시작 (총 {pages_to_verify}개 페이지)")
+    start_datetime = datetime.now()
+    print(f"\n=== 검증 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
+    print(f"총 {pages_to_verify}개 페이지 검증 예정")
     start_time = time.time()
     
     errors = []
@@ -79,13 +82,17 @@ def verify_nand():
             return False
     
     total_time = time.time() - start_time
+    end_datetime = datetime.now()
     
     # 결과 출력
     if not errors:
-        print(f"\n검증 완료: 모든 데이터 일치 (총 소요시간: {format_time(int(total_time))})")
+        print(f"\n=== 검증 완료 (완료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
+        print(f"결과: 모든 데이터 일치")
+        print(f"총 소요시간: {format_time(int(total_time))}")
         return True
     else:
-        print(f"\n검증 완료: {len(errors)}개 페이지에서 오류 발견")
+        print(f"\n=== 검증 완료 (완료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
+        print(f"결과: {len(errors)}개 페이지에서 오류 발견")
         print(f"총 소요시간: {format_time(int(total_time))}")
         # 처음 5개의 오류만 상세 출력
         for error in errors[:5]:
