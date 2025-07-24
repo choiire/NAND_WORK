@@ -49,47 +49,61 @@ class MT29F4G08ABADAWP:
         """데이터 핀을 출력 모드로 설정"""
         for pin in self.IO_pins:
             GPIO.setup(pin, GPIO.OUT)
+        time.sleep(0.00001)  # 10us 대기
             
     def set_data_pins_input(self):
         """데이터 핀을 입력 모드로 설정"""
         for pin in self.IO_pins:
             GPIO.setup(pin, GPIO.IN)
+        time.sleep(0.00001)  # 10us 대기
             
     def write_data(self, data):
         """8비트 데이터 쓰기"""
         for i in range(8):
             GPIO.output(self.IO_pins[i], (data >> i) & 1)
+        time.sleep(0.00001)  # 10us 대기
             
     def read_data(self):
         """8비트 데이터 읽기"""
         data = 0
         for i in range(8):
             data |= GPIO.input(self.IO_pins[i]) << i
+        time.sleep(0.00001)  # 10us 대기
         return data
         
     def write_command(self, cmd):
         """커맨드 쓰기"""
         GPIO.output(self.CE, GPIO.LOW)   # Chip Enable
+        time.sleep(0.00001)  # 10us 대기
+        
         GPIO.output(self.CLE, GPIO.HIGH) # Command Latch Enable
         GPIO.output(self.ALE, GPIO.LOW)  # Address Latch Disable
+        time.sleep(0.00001)  # 10us 대기
         
         GPIO.output(self.WE, GPIO.LOW)   # Write Enable
         self.write_data(cmd)
         GPIO.output(self.WE, GPIO.HIGH)  # Write Disable
+        time.sleep(0.00001)  # 10us 대기
         
         GPIO.output(self.CLE, GPIO.LOW)  # Command Latch Disable
+        time.sleep(0.00001)  # 10us 대기
         
     def write_address(self, addr):
         """주소 쓰기"""
         GPIO.output(self.CE, GPIO.LOW)   # Chip Enable
+        time.sleep(0.00001)  # 10us 대기
+        
         GPIO.output(self.CLE, GPIO.LOW)  # Command Latch Disable
         GPIO.output(self.ALE, GPIO.HIGH) # Address Latch Enable
+        time.sleep(0.00001)  # 10us 대기
         
         GPIO.output(self.WE, GPIO.LOW)   # Write Enable
         self.write_data(addr)
         GPIO.output(self.WE, GPIO.HIGH)  # Write Disable
+        time.sleep(0.00001)  # 10us 대기
         
         GPIO.output(self.ALE, GPIO.LOW)  # Address Latch Disable
+        time.sleep(0.00001)  # 10us 대기
         
     def write_page(self, page_no: int, data: bytes):
         """한 페이지 쓰기
@@ -108,10 +122,12 @@ class MT29F4G08ABADAWP:
             self.write_address((page_no >> (8 * i)) & 0xFF)
 
         # 데이터 쓰기
+        self.set_data_pins_output()  # 데이터 핀을 출력으로 설정
         for byte in data:
             GPIO.output(self.WE, GPIO.LOW)   # Write Enable
             self.write_data(byte)
             GPIO.output(self.WE, GPIO.HIGH)  # Write Disable
+            time.sleep(0.00001)  # 10us 대기
             
         # Program 커맨드
         self.write_command(0x10)
@@ -147,8 +163,10 @@ class MT29F4G08ABADAWP:
         data = []
         for _ in range(length):
             GPIO.output(self.RE, GPIO.LOW)   # Read Enable
+            time.sleep(0.00001)  # 10us 대기
             byte = self.read_data()
             GPIO.output(self.RE, GPIO.HIGH)  # Read Disable
+            time.sleep(0.00001)  # 10us 대기
             data.append(byte)
             
         # 데이터 핀을 출력 모드로 복귀
