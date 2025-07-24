@@ -13,7 +13,7 @@ def verify_nand():
     total_size = len(input_data)
     pages_to_verify = total_size // 2048  # 2KB 단위로 나누기
     
-    print(f"총 {pages_to_verify}개의 페이지를 검증합니다...")
+    print(f"검증 시작 (총 {pages_to_verify}개 페이지)")
     
     errors = []
     verified_pages = 0
@@ -47,25 +47,30 @@ def verify_nand():
                     })
             
             verified_pages += 1
-            if verified_pages % 100 == 0:  # 100페이지마다 진행률 출력
-                print(f"진행률: {verified_pages}/{pages_to_verify} ({verified_pages/pages_to_verify*100:.1f}%)")
+            # 진행률은 10% 단위로만 출력
+            if verified_pages % (pages_to_verify // 10) == 0:
+                print(f"검증 진행률: {(verified_pages/pages_to_verify*100):.0f}%")
                 
         except Exception as e:
-            print(f"오류 발생 - 페이지 {page_no}, 오류: {str(e)}")
+            print(f"오류 발생 - 페이지: {page_no}")
+            print(f"오류 내용: {str(e)}")
             return False
     
     # 결과 출력
     if not errors:
-        print("\n검증 완료: 모든 데이터가 일치합니다!")
+        print("\n검증 완료: 모든 데이터 일치")
         return True
     else:
-        print(f"\n검증 완료: {len(errors)}개의 페이지에서 오류가 발견되었습니다.")
-        for error in errors:
+        print(f"\n검증 완료: {len(errors)}개 페이지에서 오류 발견")
+        # 처음 5개의 오류만 상세 출력
+        for error in errors[:5]:
             print(f"\n페이지 {error['page']} (주소: {error['address']}):")
             for mismatch in error['mismatches']:
                 print(f"  오프셋 0x{mismatch['offset']:08X}: "
                       f"예상값 0x{mismatch['expected']:02X}, "
                       f"실제값 0x{mismatch['actual']:02X}")
+        if len(errors) > 5:
+            print(f"\n... 외 {len(errors)-5}개 페이지에서 오류 발생")
         return False
 
 if __name__ == "__main__":
