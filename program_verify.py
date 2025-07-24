@@ -15,26 +15,29 @@ def main():
     
     # 각 파일에 대해
     for filename in files:
-        # 파일 이름에서 주소 추출 (예: 00000840.bin -> 0x840)
-        addr = hex_to_int(filename.split('.')[0])
+        # 파일 이름에서 바이트 오프셋 추출 (예: 00000840.bin -> 0x840)
+        byte_offset = hex_to_int(filename.split('.')[0])
+        # 페이지 크기 (2,048 + 64 = 0x840)
+        PAGE_SIZE = 0x840
+        page_no = byte_offset // PAGE_SIZE  # Row Address
         
-        print(f"프로그래밍 주소 0x{addr:X}...")
+        print(f"프로그래밍 페이지 {page_no} (offset 0x{byte_offset:X})...")
         
         # 파일 읽기
         with open(os.path.join(splits_dir, filename), 'rb') as f:
             data = f.read()
             
         # 페이지 프로그래밍
-        nand.write_page(addr, data)
+        nand.write_page(page_no, data)
         
         # 검증을 위해 다시 읽기
-        read_data = nand.read_page(addr, len(data))
+        read_data = nand.read_page(page_no, len(data))
         
         # 데이터 비교
         if read_data == data:
-            print(f"주소 0x{addr:X} 검증 성공")
+            print(f"페이지 {page_no} 검증 성공")
         else:
-            print(f"주소 0x{addr:X} 검증 실패!")
+            print(f"페이지 {page_no} 검증 실패!")
             # 실패한 경우 첫 번째 불일치 바이트 출력
             for i, (w, r) in enumerate(zip(data, read_data)):
                 if w != r:

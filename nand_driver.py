@@ -91,19 +91,22 @@ class MT29F4G08ABADAWP:
         
         GPIO.output(self.ALE, GPIO.LOW)  # Address Latch Disable
         
-    def write_page(self, page_addr, data):
+    def write_page(self, page_no: int, data: bytes):
         """한 페이지 쓰기
-        page_addr: 5바이트 주소 (Row Address 3바이트 + Column Address 2바이트)
+        page_no: ROW 주소 (페이지 번호, 0부터 시작)
         data: 쓸 데이터 바이트 배열 (최대 2048+64 바이트)
         """
         # Serial Data Input 커맨드
         self.write_command(0x80)
-        
-        # 5 바이트 주소 입력
-        for i in range(5):
-            addr_byte = (page_addr >> (i*8)) & 0xFF
-            self.write_address(addr_byte)
-            
+
+        # Column Address (고정 0x0000)
+        self.write_address(0x00)  # Column LSB
+        self.write_address(0x00)  # Column MSB
+
+        # Row Address (3바이트)
+        for i in range(3):
+            self.write_address((page_no >> (8 * i)) & 0xFF)
+
         # 데이터 쓰기
         for byte in data:
             GPIO.output(self.WE, GPIO.LOW)   # Write Enable
@@ -116,20 +119,22 @@ class MT29F4G08ABADAWP:
         # R/B# 신호가 Ready될 때까지 대기
         self.wait_ready()
         
-    def read_page(self, page_addr, length=2048):
+    def read_page(self, page_no: int, length: int = 2048):
         """한 페이지 읽기
-        page_addr: 5바이트 주소 (Row Address 3바이트 + Column Address 2바이트)
-        length: 읽을 바이트 수 (기본 2048)
-        returns: 읽은 데이터 바이트 배열
+        page_no: ROW 주소 (페이지 번호)
+        length: 읽을 바이트 수
         """
         # Read 커맨드
         self.write_command(0x00)
-        
-        # 5 바이트 주소 입력
-        for i in range(5):
-            addr_byte = (page_addr >> (i*8)) & 0xFF
-            self.write_address(addr_byte)
-            
+
+        # Column Address (0x0000)
+        self.write_address(0x00)
+        self.write_address(0x00)
+
+        # Row Address (3바이트)
+        for i in range(3):
+            self.write_address((page_no >> (8 * i)) & 0xFF)
+
         # Read Confirm 커맨드
         self.write_command(0x30)
         
