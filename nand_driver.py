@@ -155,3 +155,20 @@ class MT29F4G08ABADAWP:
         self.set_data_pins_output()
         
         return bytes(data) 
+    
+    def erase_block(self, page_no: int):
+        """블록 단위 erase
+        page_no: 해당 블록 내 아무 페이지 번호 (row address)
+        """
+        # Block Erase 커맨드 (0x60)
+        self.write_command(0x60)
+ 
+        # 블록의 첫 페이지 row address 사용
+        for i in range(3):
+            self.write_address((page_no >> (8 * i)) & 0xFF)
+ 
+        # Confirm (0xD0)
+        self.write_command(0xD0)
+ 
+        # Ready 대기
+        self.wait_ready() 

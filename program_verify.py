@@ -14,11 +14,13 @@ def main():
     files = sorted([f for f in os.listdir(splits_dir) if f.endswith('.bin')])
     
     # 각 파일에 대해
+    current_block = -1
     for filename in files:
         # 파일 이름에서 바이트 오프셋 추출 (예: 00000840.bin -> 0x840)
         byte_offset = hex_to_int(filename.split('.')[0])
         # 페이지 크기 (2,048 + 64 = 0x840)
         PAGE_SIZE = 0x840
+        PAGES_PER_BLOCK = 64  # 128K block (64 * 2K)
         page_no = byte_offset // PAGE_SIZE  # Row Address
         
         print(f"프로그래밍 페이지 {page_no} (offset 0x{byte_offset:X})...")
@@ -27,6 +29,13 @@ def main():
         with open(os.path.join(splits_dir, filename), 'rb') as f:
             data = f.read()
             
+        # 블록이 바뀌면 먼저 erase
+        block_no = page_no // PAGES_PER_BLOCK
+        if block_no != current_block:
+            print(f"블록 {block_no} erase...")
+            nand.erase_block(page_no)
+            current_block = block_no
+
         # 페이지 프로그래밍
         nand.write_page(page_no, data)
         
