@@ -6,18 +6,36 @@ def hex_to_int(hex_str: str) -> int:
     """16진수 문자열을 정수로 변환"""
     return int(hex_str, 16)
 
+def format_time(seconds):
+    """초 단위 시간을 시:분:초 형식으로 변환"""
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    seconds = seconds % 60
+    if hours > 0:
+        return f"{hours}시간 {minutes}분 {seconds}초"
+    elif minutes > 0:
+        return f"{minutes}분 {seconds}초"
+    else:
+        return f"{seconds}초"
+
 def erase_all_blocks(nand, total_blocks=4096):  # 4Gb = 4096 blocks
     """전체 블록 삭제"""
     print("전체 블록 삭제 시작...")
+    start_time = time.time()
     
     for block in range(total_blocks):
         # 각 블록의 첫 페이지 번호 계산 (블록당 64페이지)
         page_no = block * 64
         nand.erase_block(page_no)
         
-        # 진행률은 10% 단위로만 출력
-        if (block + 1) % (total_blocks // 10) == 0:
-            print(f"블록 삭제 진행률: {((block + 1) / total_blocks * 100):.0f}%")
+        if (block + 1) % 100 == 0:  # 100블록마다 진행상황 출력
+            elapsed_time = time.time() - start_time
+            blocks_per_sec = (block + 1) / elapsed_time
+            remaining_blocks = total_blocks - (block + 1)
+            estimated_remaining = remaining_blocks / blocks_per_sec
+            
+            print(f"블록 삭제 중: {block + 1}/{total_blocks} 블록")
+            print(f"예상 남은 시간: {format_time(int(estimated_remaining))}")
     
     print("전체 블록 삭제 완료")
 
@@ -39,6 +57,7 @@ def program_nand():
     processed_files = 0
     
     print(f"프로그래밍 시작 (총 {total_files}개 파일)")
+    start_time = time.time()
     
     for filename in files:
         # 파일 이름에서 주소 추출 (예: 20A00F90.bin -> 0x20A00F90)
@@ -54,9 +73,15 @@ def program_nand():
             nand.write_page(page_no, data)
             
             processed_files += 1
-            # 진행률은 10% 단위로만 출력
-            if processed_files % (total_files // 10) == 0:
-                print(f"프로그래밍 진행률: {(processed_files/total_files*100):.0f}%")
+            
+            # 진행 상황 및 예상 시간 계산
+            elapsed_time = time.time() - start_time
+            files_per_sec = processed_files / elapsed_time
+            remaining_files = total_files - processed_files
+            estimated_remaining = remaining_files / files_per_sec
+            
+            print(f"\n작업 중: {processed_files}/{total_files} - {filename}")
+            print(f"예상 남은 시간: {format_time(int(estimated_remaining))}")
             
         except Exception as e:
             print(f"오류 발생 - 파일: {filename}")
@@ -66,7 +91,8 @@ def program_nand():
         # 과도한 연속 쓰기 방지를 위한 짧은 대기
         time.sleep(0.01)
     
-    print("프로그래밍 완료")
+    total_time = time.time() - start_time
+    print(f"\n프로그래밍 완료 (총 소요시간: {format_time(int(total_time))})")
     return True
 
 if __name__ == "__main__":

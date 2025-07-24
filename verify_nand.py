@@ -1,5 +1,18 @@
 import os
+import time
 from nand_driver import MT29F4G08ABADAWP
+
+def format_time(seconds):
+    """초 단위 시간을 시:분:초 형식으로 변환"""
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    seconds = seconds % 60
+    if hours > 0:
+        return f"{hours}시간 {minutes}분 {seconds}초"
+    elif minutes > 0:
+        return f"{minutes}분 {seconds}초"
+    else:
+        return f"{seconds}초"
 
 def verify_nand():
     # NAND 드라이버 초기화
@@ -14,6 +27,7 @@ def verify_nand():
     pages_to_verify = total_size // 2048  # 2KB 단위로 나누기
     
     print(f"검증 시작 (총 {pages_to_verify}개 페이지)")
+    start_time = time.time()
     
     errors = []
     verified_pages = 0
@@ -47,21 +61,32 @@ def verify_nand():
                     })
             
             verified_pages += 1
-            # 진행률은 10% 단위로만 출력
-            if verified_pages % (pages_to_verify // 10) == 0:
-                print(f"검증 진행률: {(verified_pages/pages_to_verify*100):.0f}%")
+            
+            # 1000페이지마다 진행상황 출력
+            if verified_pages % 1000 == 0:
+                elapsed_time = time.time() - start_time
+                pages_per_sec = verified_pages / elapsed_time
+                remaining_pages = pages_to_verify - verified_pages
+                estimated_remaining = remaining_pages / pages_per_sec
+                
+                print(f"\n검증 중: {verified_pages}/{pages_to_verify} 페이지")
+                print(f"현재 주소: 0x{(page_no * 0x800):08X}")
+                print(f"예상 남은 시간: {format_time(int(estimated_remaining))}")
                 
         except Exception as e:
             print(f"오류 발생 - 페이지: {page_no}")
             print(f"오류 내용: {str(e)}")
             return False
     
+    total_time = time.time() - start_time
+    
     # 결과 출력
     if not errors:
-        print("\n검증 완료: 모든 데이터 일치")
+        print(f"\n검증 완료: 모든 데이터 일치 (총 소요시간: {format_time(int(total_time))})")
         return True
     else:
         print(f"\n검증 완료: {len(errors)}개 페이지에서 오류 발견")
+        print(f"총 소요시간: {format_time(int(total_time))}")
         # 처음 5개의 오류만 상세 출력
         for error in errors[:5]:
             print(f"\n페이지 {error['page']} (주소: {error['address']}):")
