@@ -1,0 +1,5 @@
+*.bin
+output_splits/
+input.bin
+merged_output.bin
+*.pdf 
