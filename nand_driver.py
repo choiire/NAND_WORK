@@ -110,24 +110,39 @@ class MT29F4G08ABADAWP:
         page_no: ROW 주소 (페이지 번호, 0부터 시작)
         data: 쓸 데이터 바이트 배열 (최대 2048+64 바이트)
         """
+        # 데이터 핀을 미리 출력으로 설정
+        self.set_data_pins_output()
+
         # Serial Data Input 커맨드
         self.write_command(0x80)
 
+        # Column & Row Address 한번에 처리
+        GPIO.output(self.CE, GPIO.LOW)   # Chip Enable
+        GPIO.output(self.CLE, GPIO.LOW)  # Command Latch Disable
+        GPIO.output(self.ALE, GPIO.HIGH) # Address Latch Enable
+        
         # Column Address (고정 0x0000)
-        self.write_address(0x00)  # Column LSB
-        self.write_address(0x00)  # Column MSB
+        GPIO.output(self.WE, GPIO.LOW)
+        self.write_data(0x00)  # Column LSB
+        GPIO.output(self.WE, GPIO.HIGH)
+        
+        GPIO.output(self.WE, GPIO.LOW)
+        self.write_data(0x00)  # Column MSB
+        GPIO.output(self.WE, GPIO.HIGH)
 
         # Row Address (3바이트)
         for i in range(3):
-            self.write_address((page_no >> (8 * i)) & 0xFF)
+            GPIO.output(self.WE, GPIO.LOW)
+            self.write_data((page_no >> (8 * i)) & 0xFF)
+            GPIO.output(self.WE, GPIO.HIGH)
+            
+        GPIO.output(self.ALE, GPIO.LOW)  # Address Latch Disable
 
-        # 데이터 쓰기
-        self.set_data_pins_output()  # 데이터 핀을 출력으로 설정
+        # 데이터 쓰기 - 최소한의 GPIO 변경으로 처리
         for byte in data:
-            GPIO.output(self.WE, GPIO.LOW)   # Write Enable
+            GPIO.output(self.WE, GPIO.LOW)
             self.write_data(byte)
-            GPIO.output(self.WE, GPIO.HIGH)  # Write Disable
-            time.sleep(0.00001)  # 10us 대기
+            GPIO.output(self.WE, GPIO.HIGH)
             
         # Program 커맨드
         self.write_command(0x10)
@@ -143,13 +158,27 @@ class MT29F4G08ABADAWP:
         # Read 커맨드
         self.write_command(0x00)
 
+        # Column & Row Address 한번에 처리
+        GPIO.output(self.CE, GPIO.LOW)   # Chip Enable
+        GPIO.output(self.CLE, GPIO.LOW)  # Command Latch Disable
+        GPIO.output(self.ALE, GPIO.HIGH) # Address Latch Enable
+
         # Column Address (0x0000)
-        self.write_address(0x00)
-        self.write_address(0x00)
+        GPIO.output(self.WE, GPIO.LOW)
+        self.write_data(0x00)
+        GPIO.output(self.WE, GPIO.HIGH)
+        
+        GPIO.output(self.WE, GPIO.LOW)
+        self.write_data(0x00)
+        GPIO.output(self.WE, GPIO.HIGH)
 
         # Row Address (3바이트)
         for i in range(3):
-            self.write_address((page_no >> (8 * i)) & 0xFF)
+            GPIO.output(self.WE, GPIO.LOW)
+            self.write_data((page_no >> (8 * i)) & 0xFF)
+            GPIO.output(self.WE, GPIO.HIGH)
+            
+        GPIO.output(self.ALE, GPIO.LOW)  # Address Latch Disable
 
         # Read Confirm 커맨드
         self.write_command(0x30)
@@ -160,19 +189,18 @@ class MT29F4G08ABADAWP:
         # 데이터 핀을 입력 모드로 변경
         self.set_data_pins_input()
         
+        # 데이터 읽기 - 최소한의 GPIO 변경으로 처리
         data = []
         for _ in range(length):
-            GPIO.output(self.RE, GPIO.LOW)   # Read Enable
-            time.sleep(0.00001)  # 10us 대기
+            GPIO.output(self.RE, GPIO.LOW)
             byte = self.read_data()
-            GPIO.output(self.RE, GPIO.HIGH)  # Read Disable
-            time.sleep(0.00001)  # 10us 대기
+            GPIO.output(self.RE, GPIO.HIGH)
             data.append(byte)
             
         # 데이터 핀을 출력 모드로 복귀
         self.set_data_pins_output()
         
-        return bytes(data) 
+        return bytes(data)
     
     def erase_block(self, page_no: int):
         """블록 단위 erase

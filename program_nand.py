@@ -8,28 +8,23 @@ def hex_to_int(hex_str: str) -> int:
     """16진수 문자열을 정수로 변환"""
     return int(hex_str, 16)
 
-def erase_all_blocks(nand, total_blocks=4096):  # 4Gb = 4096 blocks
-    """전체 블록 삭제"""
+def erase_used_blocks(nand, used_blocks):
+    """사용할 블록만 선택적으로 삭제"""
     start_datetime = datetime.now()
     print(f"\n=== 블록 삭제 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
+    print(f"총 {len(used_blocks)}개 블록 삭제 예정")
     
-    for block in range(total_blocks):
-        # 각 블록의 첫 페이지 번호 계산 (블록당 64페이지)
-        page_no = block * 64
-        nand.erase_block(page_no)
-        
-        if (block + 1) % 100 == 0:  # 100블록마다 진행상황 출력
-            sys.stdout.write(f"\r블록 삭제 중: {block + 1}/{total_blocks} 블록")
+    for i, block in enumerate(sorted(used_blocks)):
+        nand.erase_block(block * 64)  # 블록의 첫 페이지 번호로 변환
+        if (i + 1) % 10 == 0:  # 10블록마다 진행상황 출력
+            sys.stdout.write(f"\r블록 삭제 중: {i + 1}/{len(used_blocks)} 블록")
             sys.stdout.flush()
     
-    print("\n전체 블록 삭제 완료")
+    print("\n블록 삭제 완료")
 
 def program_nand():
     # NAND 드라이버 초기화
     nand = MT29F4G08ABADAWP()
-    
-    # 전체 블록 삭제
-    erase_all_blocks(nand)
     
     # output_splits 디렉토리 경로
     splits_dir = "output_splits"
@@ -38,6 +33,16 @@ def program_nand():
     files = [f for f in os.listdir(splits_dir) if f.endswith('.bin')]
     files.sort()
     
+    # 사용할 블록 계산
+    used_blocks = set()
+    for filename in files:
+        address = hex_to_int(filename.split('.')[0])
+        block_no = (address // 0x800) // 64  # 페이지 번호를 블록 번호로 변환
+        used_blocks.add(block_no)
+    
+    # 필요한 블록만 삭제
+    erase_used_blocks(nand, used_blocks)
+    
     total_files = len(files)
     processed_files = 0
     
@@ -45,33 +50,58 @@ def program_nand():
     print(f"\n=== 프로그래밍 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
     print(f"총 {total_files}개 파일 프로그래밍 예정")
     
-    for filename in files:
-        # 파일 이름에서 주소 추출 (예: 20A00F90.bin -> 0x20A00F90)
-        address = hex_to_int(filename.split('.')[0])
-        page_no = address // 0x800
-        
-        # 파일 읽기
-        with open(os.path.join(splits_dir, filename), 'rb') as f:
-            data = f.read()
-            
-        try:
-            # 페이지 프로그래밍
-            nand.write_page(page_no, data)
-            
-            processed_files += 1
-            sys.stdout.write(f"\r작업 중: {processed_files}/{total_files} - {filename}")
-            sys.stdout.flush()
-            
-        except Exception as e:
-            print(f"\n오류 발생 - 파일: {filename}")
-            print(f"오류 내용: {str(e)}")
-            return False
-            
-        # 과도한 연속 쓰기 방지를 위한 짧은 대기
-        time.sleep(0.01)
+    # 연속된 페이지 버퍼링을 위한 변수들
+    buffer = []
+    current_page = -1
     
-    print("\n\n프로그래밍 완료")
-    return True
+    try:
+        for filename in files:
+            address = hex_to_int(filename.split('.')[0])
+            page_no = address // 0x800
+            
+            with open(os.path.join(splits_dir, filename), 'rb') as f:
+                data = f.read()
+            
+            if current_page == -1:
+                current_page = page_no
+                buffer = [data]
+            elif page_no == current_page + len(buffer):
+                buffer.append(data)
+                # 버퍼가 8페이지가 되면 프로그래밍 (메모리 관리)
+                if len(buffer) >= 8:
+                    for i, buf_data in enumerate(buffer):
+                        nand.write_page(current_page + i, buf_data)
+                    processed_files += len(buffer)
+                    sys.stdout.write(f"\r작업 중: {processed_files}/{total_files}")
+                    sys.stdout.flush()
+                    buffer = []
+                    current_page = -1
+            else:
+                # 연속되지 않은 페이지를 만나면 버퍼 프로그래밍
+                for i, buf_data in enumerate(buffer):
+                    nand.write_page(current_page + i, buf_data)
+                processed_files += len(buffer)
+                buffer = [data]
+                current_page = page_no
+                sys.stdout.write(f"\r작업 중: {processed_files}/{total_files}")
+                sys.stdout.flush()
+        
+        # 마지막 버퍼 처리
+        if buffer:
+            for i, buf_data in enumerate(buffer):
+                nand.write_page(current_page + i, buf_data)
+            processed_files += len(buffer)
+            sys.stdout.write(f"\r작업 중: {processed_files}/{total_files}")
+            sys.stdout.flush()
+        
+        end_datetime = datetime.now()
+        print(f"\n\n프로그래밍 완료 (완료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')})")
+        return True
+        
+    except Exception as e:
+        print(f"\n오류 발생 - 마지막 처리 파일: {filename if 'filename' in locals() else 'Unknown'}")
+        print(f"오류 내용: {str(e)}")
+        return False
 
 if __name__ == "__main__":
     program_nand() 
