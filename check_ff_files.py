@@ -1,3 +1,7 @@
+# Split 한 파일 중에서 빈 파일은 없나 확인용용
+# 2KB 파일 중 0xFF로 채워진 파일을 찾는 프로그램
+
+
 import os
 import sys
 

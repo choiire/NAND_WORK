@@ -1,3 +1,6 @@
+# 오류 블록 테스트
+# 블록 삭제 후 데이터 쓰기 후 검증
+
 import os
 import sys
 from nand_driver import MT29F4G08ABADAWP

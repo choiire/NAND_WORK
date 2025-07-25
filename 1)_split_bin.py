@@ -28,12 +28,16 @@ def split_file():
             chunk_start_address = -1
             in_data_block = False
             ff_row_count = 0
+            temp_ff_data = bytearray()
 
             while True:
                 row = f.read(ROW_SIZE)
                 if not row:
                     # 파일의 끝
                     if in_data_block and chunk_data:
+                        # 마지막 청크에 임시 저장된 FF 데이터 추가
+                        if ff_row_count < MIN_FF_ROWS:
+                            chunk_data.extend(temp_ff_data)
                         output_filename = os.path.join(OUTPUT_DIR, f"{chunk_start_address:08X}.bin")
                         with open(output_filename, 'wb') as out_f:
                             out_f.write(chunk_data)
@@ -48,6 +52,8 @@ def split_file():
 
                 if is_ff_row:
                     ff_row_count += 1
+                    temp_ff_data.extend(row)
+                    
                     if ff_row_count >= MIN_FF_ROWS and in_data_block:
                         # FF 행이 MIN_FF_ROWS개 이상 연속으로 나타나면 현재 데이터 블록의 끝
                         output_filename = os.path.join(OUTPUT_DIR, f"{chunk_start_address:08X}.bin")
@@ -56,19 +62,22 @@ def split_file():
                         print(f"  - 청크 저장: {output_filename} ({len(chunk_data)} 바이트)")
                         in_data_block = False
                         chunk_data = bytearray()
+                        temp_ff_data = bytearray()
                 else:
                     # 유의미한 데이터 행
-                    ff_row_count = 0
                     if not in_data_block:
                         # 새 데이터 블록 시작
                         in_data_block = True
                         chunk_start_address = current_address
                         chunk_data = bytearray()
+                    
+                    # 이전의 FF 행들이 MIN_FF_ROWS 미만이면 청크에 포함
+                    if ff_row_count < MIN_FF_ROWS:
+                        chunk_data.extend(temp_ff_data)
+                    
                     chunk_data.extend(row)
-
-                if in_data_block and ff_row_count < MIN_FF_ROWS:
-                    # FF 행이지만 아직 MIN_FF_ROWS에 도달하지 않았다면 데이터에 포함
-                    chunk_data.extend(row)
+                    ff_row_count = 0
+                    temp_ff_data = bytearray()
 
                 current_address += ROW_SIZE
 

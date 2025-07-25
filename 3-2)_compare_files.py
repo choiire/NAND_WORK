@@ -47,7 +47,7 @@ def are_files_identical(file1_path, file2_path, chunk_size=8192):
         return False
 
 if __name__ == "__main__":
-    file_a = "input.BIN"
+    file_a = "input.bin"
     file_b = "merged_output.bin"
 
     if not os.path.exists(file_a):
