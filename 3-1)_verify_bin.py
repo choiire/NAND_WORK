@@ -1,7 +1,7 @@
 import os
 import hashlib
 
-ORIGINAL_FILE = "input.BIN"
+ORIGINAL_FILE = "input.bin"
 MERGED_FILE = "merged_output.bin"
 
 def get_file_info(file_path):

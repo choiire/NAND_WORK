@@ -1,8 +1,8 @@
 import os
 
-INPUT_DIR = "output_chunks"
+INPUT_DIR = "output_splits"
 OUTPUT_FILE = "merged_output.bin"
-ORIGINAL_FILE = "input.BIN"
+ORIGINAL_FILE = "input.bin"
 ROW_SIZE = 16
 ALL_FF_ROW = b'\xff' * ROW_SIZE
 
