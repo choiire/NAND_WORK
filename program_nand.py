@@ -62,25 +62,26 @@ def validate_directory(dirpath: str) -> None:
     if not os.path.isdir(dirpath):
         raise NotADirectoryError(f"유효한 디렉토리가 아님: {dirpath}")
 
-def erase_used_blocks(nand, used_blocks):
-    """사용할 블록만 선택적으로 삭제"""
-    if not used_blocks:
-        raise ValueError("삭제할 블록이 없습니다")
-        
+def erase_all_blocks(nand):
+    """전체 블록 삭제"""
+    TOTAL_BLOCKS = 4096  # 4Gb = 4096 blocks
+    
     start_datetime = datetime.now()
-    print(f"\n=== 블록 삭제 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
-    print(f"총 {len(used_blocks)}개 블록 삭제 예정")
+    print(f"\n=== 전체 블록 삭제 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
+    print(f"총 {TOTAL_BLOCKS}개 블록 삭제 예정")
     
     try:
-        for i, block in enumerate(sorted(used_blocks)):
-            if not validate_block_number(block):
-                raise ValueError(f"유효하지 않은 블록 번호: {block}")
-            nand.erase_block(block * 64)  # 블록의 첫 페이지 번호로 변환
-            if (i + 1) % 10 == 0:  # 10블록마다 진행상황 출력
-                sys.stdout.write(f"\r블록 삭제 중: {i + 1}/{len(used_blocks)} 블록")
+        for block in range(TOTAL_BLOCKS):
+            # 각 블록의 첫 페이지 번호 계산 (블록당 64페이지)
+            page_no = block * 64
+            nand.erase_block(page_no)
+            
+            if (block + 1) % 10 == 0:  # 10블록마다 진행상황 출력
+                sys.stdout.write(f"\r블록 삭제 중: {block + 1}/{TOTAL_BLOCKS} 블록")
                 sys.stdout.flush()
         
-        print("\n블록 삭제 완료")
+        print("\n전체 블록 삭제 완료")
+        
     except Exception as e:
         print(f"\n블록 삭제 중 오류 발생: {str(e)}")
         raise
@@ -100,18 +101,8 @@ def program_nand():
             raise ValueError(f"프로그래밍할 파일이 없음: {splits_dir}")
         files.sort()
         
-        # 사용할 블록 계산 및 검증
-        used_blocks = set()
-        for filename in files:
-            try:
-                address = hex_to_int(filename.split('.')[0])
-                block_no = calculate_block_number(address)
-                used_blocks.add(block_no)
-            except ValueError as e:
-                raise ValueError(f"파일 '{filename}' 처리 중 오류: {str(e)}")
-        
-        # 필요한 블록만 삭제
-        erase_used_blocks(nand, used_blocks)
+        # 전체 블록 삭제
+        erase_all_blocks(nand)
         
         total_files = len(files)
         processed_files = 0
