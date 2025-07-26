@@ -19,6 +19,25 @@ def verify_block(nand, block_no: int, pages_to_check: list = None) -> dict:
     MAX_RETRIES = 5  # 페이지 읽기 최대 재시도 횟수
     TIMEOUT_SECONDS = 5  # 각 시도당 최대 대기 시간
     
+    # 공장 출하 시 Bad Block 마킹 확인
+    first_page = block_start_page
+    last_page = block_start_page + PAGES_PER_BLOCK - 1
+    
+    try:
+        first_byte = nand.read_page(first_page, 1)[0]
+        last_byte = nand.read_page(last_page, 1)[0]
+        
+        if first_byte != 0xFF or last_byte != 0xFF:
+            return {
+                'success': False,
+                'error': f"공장 출하 시 Bad Block 마킹 발견 (첫 페이지: 0x{first_byte:02X}, 마지막 페이지: 0x{last_byte:02X})"
+            }
+    except Exception as e:
+        return {
+            'success': False,
+            'error': f"Bad Block 마킹 확인 중 오류 발생: {str(e)}"
+        }
+    
     if pages_to_check is None:
         pages_to_check = [block_start_page]  # 첫 페이지만 검사
     
