@@ -14,7 +14,7 @@ class MT29F4G08ABADAWP:
     tRR = 20    # RE# low to RE# high
     tWC = 25    # Write Cycle Time
     
-    def __init__(self):
+    def __init__(self, skip_bad_block_scan=False):
         # GPIO 핀 설정
         self.RB = 13  # Ready/Busy
         self.RE = 26  # Read Enable
@@ -57,8 +57,11 @@ class MT29F4G08ABADAWP:
             # 파워온 시퀀스
             self.power_on_sequence()
             
-            # Bad Block 스캔
-            self.scan_bad_blocks()
+            # Bad Block 스캔 (옵션)
+            if not skip_bad_block_scan:
+                self.scan_bad_blocks()
+            else:
+                print("Bad Block 스캔을 건너뜁니다.")
             
         except Exception as e:
             GPIO.cleanup()
