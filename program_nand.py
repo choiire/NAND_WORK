@@ -296,11 +296,10 @@ def program_nand():
                 page_no = calculate_page_number(address)
                 block_no = page_no // 64
                 
-                # Bad Block 체크 및 대체 블록 찾기
-                if nand.is_bad_block(block_no):
-                    new_block = nand.find_good_block(block_no + 1)
-                    print(f"\n블록 {block_no}이 Bad Block입니다. 대체 블록 {new_block}을 사용합니다.")
-                    page_no = new_block * 64 + (page_no % 64)
+                # 디버깅 정보 출력
+                print(f"\n현재 작업: {filename}")
+                print(f"주소: 0x{address:08X}")
+                print(f"페이지: {page_no} (블록 {block_no})")
                 
                 # 데이터 읽기
                 with open(filepath, 'rb') as f:
@@ -316,10 +315,13 @@ def program_nand():
                                 # 1. 페이지 쓰기
                                 nand.write_page(page_no, write_data)
                                 
-                                # 2. 즉시 검증
+                                # 2. 데이터 정착 대기
+                                time.sleep(0.001)  # 1ms 대기
+                                
+                                # 3. 검증
                                 read_data = nand.read_page(page_no)
                                 
-                                # 3. 데이터 비교
+                                # 4. 데이터 비교
                                 if read_data != write_data:
                                     # 불일치하는 바이트 위치와 값 찾기
                                     mismatch_positions = []
@@ -359,10 +361,9 @@ def program_nand():
                                 'file': filename,
                                 'error': str(e)
                             })
-                            nand.mark_bad_block(block_no)
                         else:
                             print(f"\n파일 '{filename}' 프로그래밍/검증 실패, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
-                            time.sleep(0.1)
+                            time.sleep(0.5)  # 재시도 간격 증가
                 
                 if success:
                     processed_files += 1
