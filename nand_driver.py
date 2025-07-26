@@ -210,13 +210,18 @@ class MT29F4G08ABADAWP:
             self.reset_pins()
             
     def erase_block(self, page_no: int):
-        """블록 단위 erase"""
+        """블록 단위 erase
+        page_no: 해당 블록 내 아무 페이지 번호 (row address)
+        """
         # 블록 번호 유효성 검사
         block_no = page_no // 64
-        if block_no >= 4096:  # 4Gb = 4096 blocks
-            raise ValueError("Invalid block number")
+        if block_no < 0 or block_no >= 4096:  # 4Gb = 4096 blocks
+            raise ValueError(f"Invalid block number: {block_no}")
             
-        # Column & Row Address 직접 처리
+        # Block Erase 커맨드 (0x60)
+        self.write_command(0x60)
+ 
+        # Row Address (3바이트)
         GPIO.output(self.CE, GPIO.LOW)
         GPIO.output(self.CLE, GPIO.LOW)
         GPIO.output(self.ALE, GPIO.HIGH)
@@ -225,6 +230,8 @@ class MT29F4G08ABADAWP:
             GPIO.output(self.WE, GPIO.LOW)
             self.write_data((page_no >> (8 * i)) & 0xFF)
             GPIO.output(self.WE, GPIO.HIGH)
+            
+        GPIO.output(self.ALE, GPIO.LOW)
  
         # Confirm (0xD0)
         self.write_command(0xD0)
