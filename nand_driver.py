@@ -591,7 +591,7 @@ class MT29F4G08ABADAWP:
         
         타이밍:
         - tWB (WE# high to R/B# low): 100ns
-        - tBERS (Block Erase Time): ~3.5ms
+        - tBERS (Block Erase Time): ~3.5ms (최대 10ms까지 가능)
         - tRST (Device Reset Time): 5us ~ 500us
         """
         try:
@@ -602,40 +602,76 @@ class MT29F4G08ABADAWP:
             # Block Erase 커맨드 (0x60)
             self.write_command(0x60)
 
-            # Row Address (3바이트)
+            # Row Address (3바이트) - 더 정확한 타이밍
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
             GPIO.output(self.ALE, GPIO.HIGH)
             
             for i in range(3):
                 GPIO.output(self.WE, GPIO.LOW)
+                time.sleep(0.00002)  # tWP (WE# pulse width) 더 길게
                 self.write_data((page_no >> (8 * i)) & 0xFF)
+                time.sleep(0.00002)
                 GPIO.output(self.WE, GPIO.HIGH)
+                time.sleep(0.00002)  # tWH (WE# high hold time) 더 길게
                 
             GPIO.output(self.ALE, GPIO.LOW)
 
-            # tADL (ALE to data loading time) 대기
-            time.sleep(0.0001)  # 100us
+            # tADL (ALE to data loading time) 더 긴 대기
+            time.sleep(0.0002)  # 200us (기존 100us에서 증가)
 
             # Confirm (0xD0)
             self.write_command(0xD0)
-            # tWB 대기 (WE# high to R/B# low)
-            time.sleep(self.tWB / 1_000_000_000)  # 100ns
+            # tWB 대기 (WE# high to R/B# low) 더 길게
+            time.sleep(0.00015)  # 150us (기존 100ns에서 크게 증가)
 
-            # Ready 대기 (tBERS)
+            # Ready 대기 (tBERS) - 더 긴 타임아웃
             timeout_start = time.time()
-            while GPIO.input(self.RB) == GPIO.LOW:
-                if time.time() - timeout_start > 0.01:  # 10ms (최대 tBERS)
-                    # 타임아웃 시 리셋 후 재시도
-                    self.write_command(0xFF)  # Reset command
-                    time.sleep(0.000005)  # 5us (최소 tRST)
-                    raise RuntimeError("블록 삭제 타임아웃")
+            initial_rb_state = GPIO.input(self.RB)
+            
+            # R/B# 신호가 LOW로 변하기를 기다림 (삭제 시작 확인)
+            rb_went_low = False
+            while time.time() - timeout_start < 0.005:  # 5ms 내에 LOW로 변해야 함
+                if GPIO.input(self.RB) == GPIO.LOW:
+                    rb_went_low = True
+                    break
                 time.sleep(0.0001)  # 100us 간격으로 체크
             
-            # 상태 확인
-            status = self.check_operation_status()
-            if not status:
-                raise RuntimeError("블록 삭제 실패")
+            if not rb_went_low:
+                print(f"경고: 블록 {block_no} R/B# 신호가 LOW로 변하지 않음 (초기 상태: {initial_rb_state})")
+            
+            # R/B# 신호가 HIGH로 돌아올 때까지 대기 (삭제 완료)
+            timeout_start = time.time()
+            while GPIO.input(self.RB) == GPIO.LOW:
+                if time.time() - timeout_start > 0.020:  # 20ms로 타임아웃 증가 (기존 10ms)
+                    # 타임아웃 시 더 강력한 리셋
+                    print(f"블록 {block_no} 삭제 타임아웃 발생, 강력한 리셋 시도...")
+                    self.write_command(0xFF)  # Reset command
+                    time.sleep(0.001)  # 1ms 대기 (기존 5us에서 증가)
+                    self.wait_ready()
+                    raise RuntimeError(f"블록 삭제 타임아웃 (20ms 초과)")
+                time.sleep(0.0002)  # 200us 간격으로 체크 (더 자주 체크)
+            
+            # 추가 안정화 대기
+            time.sleep(0.001)  # 1ms 추가 대기
+            
+            # 상태 확인 (여러 번 시도)
+            status_check_success = False
+            for status_retry in range(3):
+                try:
+                    status = self.check_operation_status()
+                    if status:
+                        status_check_success = True
+                        break
+                    else:
+                        time.sleep(0.001)  # 1ms 대기 후 재시도
+                except Exception as e:
+                    if status_retry == 2:  # 마지막 시도
+                        raise e
+                    time.sleep(0.001)
+            
+            if not status_check_success:
+                raise RuntimeError("블록 삭제 상태 확인 실패")
                 
         except Exception as e:
             raise RuntimeError(f"블록 삭제 실패 (블록 {page_no // self.PAGES_PER_BLOCK}): {str(e)}")
@@ -644,6 +680,6 @@ class MT29F4G08ABADAWP:
             # 항상 안전한 상태로 복원
             try:
                 self.reset_pins()
-                time.sleep(0.001)  # 1ms 대기
+                time.sleep(0.002)  # 2ms 대기 (더 길게)
             except:
                 pass 

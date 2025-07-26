@@ -342,6 +342,7 @@ def erase_and_verify_blocks(verification_level: str = "quick"):
                 erase_success = False
                 final_error = None
                 
+                # 먼저 일반적인 재시도
                 for retry in range(MAX_RETRIES):
                     try:
                         nand.erase_block(page_no)
@@ -352,15 +353,82 @@ def erase_and_verify_blocks(verification_level: str = "quick"):
                         if retry < MAX_RETRIES - 1:
                             time.sleep(0.1)  # 재시도 전 대기
                 
+                # 일반 재시도 실패 시 강력한 재시도 시도
+                if not erase_success:
+                    print(f"\n블록 {block} 일반 삭제 실패, 강력한 재시도 시작...")
+                    
+                    # 강력한 재시도 (더 긴 타임아웃, 리셋 포함)
+                    for strong_retry in range(3):
+                        try:
+                            # 리셋 명령으로 NAND 상태 초기화
+                            nand.write_command(0xFF)  # Reset command
+                            time.sleep(0.001)  # 1ms 대기
+                            nand.wait_ready()
+                            
+                            # 더 긴 대기 시간으로 삭제 시도
+                            print(f"    강력한 재시도 {strong_retry + 1}/3...")
+                            
+                            # Block Erase 커맨드 (0x60) - 수동 구현
+                            nand.write_command(0x60)
+                            
+                            # Row Address (3바이트) - 정확한 주소 확인
+                            import RPi.GPIO as GPIO
+                            GPIO.output(nand.CE, GPIO.LOW)
+                            GPIO.output(nand.CLE, GPIO.LOW)
+                            GPIO.output(nand.ALE, GPIO.HIGH)
+                            
+                            # 블록 주소를 페이지 단위로 변환하여 전송
+                            actual_page = block * PAGES_PER_BLOCK
+                            print(f"    블록 {block} -> 페이지 {actual_page} (0x{actual_page:08X})")
+                            
+                            for i in range(3):
+                                GPIO.output(nand.WE, GPIO.LOW)
+                                address_byte = (actual_page >> (8 * i)) & 0xFF
+                                nand.write_data(address_byte)
+                                print(f"    주소 바이트 {i}: 0x{address_byte:02X}")
+                                GPIO.output(nand.WE, GPIO.HIGH)
+                                time.sleep(0.00001)
+                                
+                            GPIO.output(nand.ALE, GPIO.LOW)
+                            time.sleep(0.0002)  # 더 긴 tADL 대기
+                            
+                            # Confirm (0xD0)
+                            nand.write_command(0xD0)
+                            time.sleep(0.00015)  # 더 긴 tWB 대기
+                            
+                            # 더 긴 타임아웃으로 Ready 대기 (최대 20ms)
+                            timeout_start = time.time()
+                            while GPIO.input(nand.RB) == GPIO.LOW:
+                                if time.time() - timeout_start > 0.02:  # 20ms 타임아웃
+                                    raise RuntimeError("강력한 재시도 타임아웃")
+                                time.sleep(0.0002)  # 200us 간격으로 체크
+                            
+                            # 상태 확인
+                            if nand.check_operation_status():
+                                erase_success = True
+                                print(f"    블록 {block} 강력한 재시도 성공!")
+                                break
+                            else:
+                                raise RuntimeError("상태 확인 실패")
+                                
+                        except Exception as e:
+                            final_error = f"강력한 재시도 {strong_retry + 1}: {str(e)}"
+                            if strong_retry < 2:
+                                time.sleep(0.5)  # 더 긴 대기
+                            else:
+                                print(f"    블록 {block} 모든 재시도 실패: {final_error}")
+                
                 # 삭제 결과 기록
                 erase_results.append({
                     'block': block,
                     'success': erase_success,
-                    'error': final_error if not erase_success else None
+                    'error': final_error if not erase_success else None,
+                    'page_address': page_no,
+                    'hex_address': f"0x{page_no:08X}"
                 })
                 
                 if not erase_success:
-                    print(f"\n블록 {block} 삭제 실패: {final_error}")
+                    print(f"최종 실패 - 블록 {block} (페이지 {page_no}, 0x{page_no:08X}): {final_error}")
                 
                 processed_blocks += 1
                 
@@ -481,6 +549,7 @@ def erase_and_verify_blocks(verification_level: str = "quick"):
             f.write(f"시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"종료 시간: {scan_end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"총 소요 시간: {total_duration}\n")
+            f.write(f"검증 수준: {verification_level}\n")
             f.write(f"정상 블록: {good_blocks}개\n")
             f.write(f"하드웨어 Bad Block: {len(hardware_bad_blocks)}개\n")
             f.write(f"데이터 손상 Block: {len(data_corruption_blocks)}개\n\n")
@@ -494,20 +563,81 @@ def erase_and_verify_blocks(verification_level: str = "quick"):
             if data_corruption_blocks:
                 f.write("=== 데이터 손상 Block (초기화 실패) ===\n")
                 for bad_block in data_corruption_blocks:
-                    if 'error' in bad_block:
-                        f.write(f"블록 {bad_block['block']}: {bad_block['error']}\n")
+                    if 'error' in bad_block['details']:
+                        f.write(f"블록 {bad_block['block']}: {bad_block['details']['error']}\n")
+                    elif 'errors' in bad_block['details']:
+                        f.write(f"블록 {bad_block['block']}: {bad_block['details']['total_errors']}개 오류\n")
                     else:
-                        f.write(f"블록 {bad_block['block']}: 첫 페이지=0x{bad_block['first_byte']:02X}, "
-                              f"마지막 페이지=0x{bad_block['last_byte']:02X}\n")
+                        f.write(f"블록 {bad_block['block']}: 검증 실패\n")
                 f.write("\n")
             
-            # 모든 블록의 삭제 결과 기록
-            f.write("=== 전체 블록 삭제 결과 ===\n")
+            # 모든 블록의 삭제 결과 상세 기록
+            f.write("=== 전체 블록 삭제 결과 상세 ===\n")
             for result in erase_results:
-                status = "성공" if result['success'] else f"실패 ({result['error']})"
-                f.write(f"블록 {result['block']}: {status}\n")
+                status = "성공" if result['success'] else f"실패"
+                f.write(f"블록 {result['block']:4d} (페이지 {result['page_address']:6d}, {result['hex_address']}): {status}")
+                if not result['success']:
+                    f.write(f" - {result['error']}")
+                f.write("\n")
+            
+            # 실패 패턴 분석
+            f.write("\n=== 실패 패턴 분석 ===\n")
+            failed_blocks = [r['block'] for r in erase_results if not r['success']]
+            if failed_blocks:
+                f.write(f"실패한 블록들: {failed_blocks}\n")
+                
+                # 연속된 블록 패턴 찾기
+                consecutive_groups = []
+                current_group = [failed_blocks[0]]
+                for i in range(1, len(failed_blocks)):
+                    if failed_blocks[i] == failed_blocks[i-1] + 1:
+                        current_group.append(failed_blocks[i])
+                    else:
+                        if len(current_group) > 1:
+                            consecutive_groups.append(current_group)
+                        current_group = [failed_blocks[i]]
+                if len(current_group) > 1:
+                    consecutive_groups.append(current_group)
+                
+                if consecutive_groups:
+                    f.write(f"연속된 실패 블록 그룹들:\n")
+                    for group in consecutive_groups:
+                        f.write(f"  블록 {group[0]}-{group[-1]} ({len(group)}개 연속)\n")
+                
+                # 특정 영역에 집중된 실패 확인
+                block_regions = {}
+                for block in failed_blocks:
+                    region = block // 100  # 100블록 단위로 영역 나누기
+                    if region not in block_regions:
+                        block_regions[region] = 0
+                    block_regions[region] += 1
+                
+                f.write(f"영역별 실패 분포 (100블록 단위):\n")
+                for region, count in sorted(block_regions.items()):
+                    start_block = region * 100
+                    end_block = min((region + 1) * 100 - 1, TOTAL_BLOCKS - 1)
+                    f.write(f"  블록 {start_block}-{end_block}: {count}개 실패\n")
         
         print(f"\n상세 로그가 {log_filename} 파일에 저장되었습니다.")
+        
+        # 실패 패턴 요약 출력
+        failed_blocks = [r['block'] for r in erase_results if not r['success']]
+        if failed_blocks:
+            print(f"\n🔍 실패 블록 분석:")
+            print(f"   실패한 블록들: {failed_blocks}")
+            
+            # 반복 실패 여부 확인을 위한 안내
+            if len(set(failed_blocks)) == len(failed_blocks):
+                print(f"   → 모두 다른 블록들이 실패 (일반적인 Bad Block 패턴)")
+            else:
+                print(f"   → 일부 블록이 중복 실패 (소프트웨어 문제 가능성)")
+            
+            # 영역별 분포 확인
+            if max(failed_blocks) - min(failed_blocks) < 100:
+                print(f"   → 실패 블록들이 특정 영역에 집중됨 (하드웨어 문제 가능성)")
+            else:
+                print(f"   → 실패 블록들이 전체적으로 분산됨 (정상적인 Bad Block 분포)")
+        
         print("=" * 80)
         
         # 성공 기준: Bad Block이 전체의 5% 미만
