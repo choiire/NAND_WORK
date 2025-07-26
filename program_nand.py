@@ -23,7 +23,9 @@ def validate_file_size(filepath: str) -> int:
     if file_size == 0:
         raise ValueError(f"파일이 비어있음: {filepath}")
         
-    if file_size > 2048 + 64:  # 데이터(2KB) + 스페어(64B)
+    # ECC 오버헤드를 고려한 최대 크기 계산
+    max_size = 2048 + 64 + ((2048 // 256) * 32)  # 데이터 + 스페어 + ECC
+    if file_size > max_size:
         raise ValueError(f"파일 크기가 너무 큼: {filepath} ({file_size} bytes)")
         
     return file_size
@@ -65,21 +67,42 @@ def validate_directory(dirpath: str) -> None:
 def erase_all_blocks(nand):
     """전체 블록 삭제"""
     TOTAL_BLOCKS = 4096  # 4Gb = 4096 blocks
+    MAX_RETRIES = 3
     
     start_datetime = datetime.now()
     print(f"\n=== 전체 블록 삭제 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
     print(f"총 {TOTAL_BLOCKS}개 블록 삭제 예정")
     
+    failed_blocks = []
+    
     try:
         for block in range(TOTAL_BLOCKS):
+            if nand.is_bad_block(block):
+                print(f"\n블록 {block}은 Bad Block으로 표시되어 있어 건너뜁니다.")
+                continue
+                
             # 각 블록의 첫 페이지 번호 계산 (블록당 64페이지)
             page_no = block * 64
-            nand.erase_block(page_no)
+            
+            # 최대 3번 재시도
+            for retry in range(MAX_RETRIES):
+                try:
+                    nand.erase_block(page_no)
+                    break
+                except Exception as e:
+                    if retry == MAX_RETRIES - 1:
+                        print(f"\n블록 {block} 삭제 실패 (최대 재시도 횟수 초과)")
+                        failed_blocks.append(block)
+                        nand.mark_bad_block(block)
+                    else:
+                        print(f"\n블록 {block} 삭제 실패, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
             
             if (block + 1) % 10 == 0:  # 10블록마다 진행상황 출력
                 sys.stdout.write(f"\r블록 삭제 중: {block + 1}/{TOTAL_BLOCKS} 블록")
                 sys.stdout.flush()
         
+        if failed_blocks:
+            print(f"\n삭제 실패한 블록들: {failed_blocks}")
         print("\n전체 블록 삭제 완료")
         
     except Exception as e:
@@ -106,6 +129,8 @@ def program_nand():
         
         total_files = len(files)
         processed_files = 0
+        failed_files = []
+        MAX_RETRIES = 3
         
         start_datetime = datetime.now()
         print(f"\n=== 프로그래밍 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
@@ -120,25 +145,49 @@ def program_nand():
                 # 주소 계산
                 address = hex_to_int(filename.split('.')[0])
                 page_no = calculate_page_number(address)
+                block_no = page_no // 64
+                
+                # Bad Block 체크 및 대체 블록 찾기
+                if nand.is_bad_block(block_no):
+                    new_block = nand.find_good_block(block_no + 1)
+                    print(f"\n블록 {block_no}이 Bad Block입니다. 대체 블록 {new_block}을 사용합니다.")
+                    page_no = new_block * 64 + (page_no % 64)
                 
                 # 데이터 읽기
                 with open(filepath, 'rb') as f:
                     data = f.read()
                 
-                # 페이지 프로그래밍
-                nand.write_page(page_no, data)
+                # 최대 3번 재시도
+                success = False
+                for retry in range(MAX_RETRIES):
+                    try:
+                        nand.write_page(page_no, data)
+                        success = True
+                        break
+                    except Exception as e:
+                        if retry == MAX_RETRIES - 1:
+                            print(f"\n파일 '{filename}' 프로그래밍 실패 (최대 재시도 횟수 초과): {str(e)}")
+                            failed_files.append(filename)
+                            nand.mark_bad_block(block_no)
+                        else:
+                            print(f"\n파일 '{filename}' 프로그래밍 실패, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
                 
-                processed_files += 1
-                sys.stdout.write(f"\r작업 중: {processed_files}/{total_files} - {filename}")
-                sys.stdout.flush()
+                if success:
+                    processed_files += 1
+                    sys.stdout.write(f"\r작업 중: {processed_files}/{total_files} - {filename}")
+                    sys.stdout.flush()
                 
             except Exception as e:
                 print(f"\n파일 '{filename}' 프로그래밍 중 오류 발생: {str(e)}")
-                return False
+                failed_files.append(filename)
         
         end_datetime = datetime.now()
         duration = end_datetime - start_datetime
         print(f"\n\n프로그래밍 완료 (소요 시간: {duration})")
+        
+        if failed_files:
+            print(f"\n프로그래밍 실패한 파일들: {failed_files}")
+            return False
         return True
         
     except Exception as e:

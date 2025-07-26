@@ -3,6 +3,7 @@ import sys
 import hashlib
 from datetime import datetime
 from nand_driver import MT29F4G08ABADAWP
+import time
 
 def calculate_block_hash(data):
     """데이터의 SHA-256 해시값 계산"""
@@ -96,49 +97,91 @@ def verify_nand():
         errors = []
         verified_blocks = 0
         MAX_ERRORS = 100  # 최대 오류 수 제한
+        CHUNK_SIZE = 10   # 한 번에 처리할 블록 수
         
         with open(input_file, 'rb') as f:
-            for block_no in range(total_blocks):
+            for chunk_start in range(0, total_blocks, CHUNK_SIZE):
+                chunk_end = min(chunk_start + CHUNK_SIZE, total_blocks)
+                chunk_blocks = chunk_end - chunk_start
+                
                 try:
-                    # input.bin에서 해당 블록의 데이터 추출
-                    block_offset = block_no * 2048 * 64
-                    f.seek(block_offset)
-                    expected_block = f.read(2048 * 64)
-                    
-                    # NAND에서 블록 데이터 읽기
-                    actual_block = bytearray()
-                    start_page = block_no * 64
-                    
-                    for page_offset in range(64):
-                        page_no = start_page + page_offset
-                        actual_block.extend(nand.read_page(page_no))
-                    
-                    # 블록 데이터 비교
-                    if expected_block != actual_block:
-                        error_info = analyze_block_error(
-                            block_no,
-                            expected_block,
-                            actual_block
-                        )
-                        errors.append(error_info)
+                    for block_offset in range(chunk_blocks):
+                        block_no = chunk_start + block_offset
                         
-                        if len(errors) >= MAX_ERRORS:
-                            print(f"\n최대 오류 수({MAX_ERRORS})에 도달하여 검증 중단")
-                            break
-                    
-                    verified_blocks += 1
-                    if verified_blocks % 10 == 0:  # 10블록마다 진행상황 출력
-                        sys.stdout.write(f"\r검증 중: {verified_blocks}/{total_blocks} 블록")
-                        sys.stdout.flush()
+                        # Bad Block 체크
+                        if nand.is_bad_block(block_no):
+                            print(f"\n블록 {block_no}은 Bad Block으로 표시되어 있어 건너뜁니다.")
+                            continue
                         
+                        # input.bin에서 해당 블록의 데이터 추출
+                        block_offset_bytes = block_no * 2048 * 64
+                        f.seek(block_offset_bytes)
+                        expected_block = f.read(2048 * 64)
+                        
+                        # NAND에서 블록 데이터 읽기
+                        actual_block = bytearray()
+                        start_page = block_no * 64
+                        
+                        try:
+                            for page_offset in range(64):
+                                page_no = start_page + page_offset
+                                
+                                # 타임아웃 설정
+                                timeout_start = time.time()
+                                while True:
+                                    try:
+                                        page_data = nand.read_page(page_no)
+                                        actual_block.extend(page_data)
+                                        break
+                                    except Exception as e:
+                                        if time.time() - timeout_start > 5:  # 5초 타임아웃
+                                            raise TimeoutError(f"페이지 {page_no} 읽기 타임아웃")
+                                        time.sleep(0.1)  # 0.1초 대기 후 재시도
+                        
+                        except Exception as e:
+                            print(f"\n블록 {block_no} 읽기 중 오류 발생: {str(e)}")
+                            nand.mark_bad_block(block_no)
+                            errors.append({
+                                'block': block_no,
+                                'error': str(e)
+                            })
+                            if len(errors) >= MAX_ERRORS:
+                                break
+                            continue
+                        
+                        # 블록 데이터 비교 (ECC 디코딩 이후)
+                        try:
+                            if expected_block != actual_block:
+                                error_info = analyze_block_error(
+                                    block_no,
+                                    expected_block,
+                                    actual_block
+                                )
+                                errors.append(error_info)
+                                
+                                if len(errors) >= MAX_ERRORS:
+                                    print(f"\n최대 오류 수({MAX_ERRORS})에 도달하여 검증 중단")
+                                    break
+                        except Exception as e:
+                            print(f"\n블록 {block_no} 비교 중 오류 발생: {str(e)}")
+                            errors.append({
+                                'block': block_no,
+                                'error': str(e)
+                            })
+                            if len(errors) >= MAX_ERRORS:
+                                break
+                        
+                        verified_blocks += 1
+                        if verified_blocks % 10 == 0:  # 10블록마다 진행상황 출력
+                            sys.stdout.write(f"\r검증 중: {verified_blocks}/{total_blocks} 블록")
+                            sys.stdout.flush()
+                            
                 except Exception as e:
-                    print(f"\n블록 {block_no} 검증 중 오류 발생: {str(e)}")
-                    errors.append({
-                        'block': block_no,
-                        'error': str(e)
-                    })
-                    if len(errors) >= MAX_ERRORS:
-                        break
+                    print(f"\n청크 처리 중 오류 발생 (블록 {chunk_start}-{chunk_end-1}): {str(e)}")
+                    continue
+                
+                if len(errors) >= MAX_ERRORS:
+                    break
         
         end_datetime = datetime.now()
         duration = end_datetime - start_datetime
