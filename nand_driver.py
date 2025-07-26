@@ -37,12 +37,12 @@ class MT29F4G08ABADAWP:
         self.bad_blocks = set()
         self._initialize_gpio()
         self.power_on_sequence()
-        # self.scan_bad_blocks() # 초기화 시 시간이 오래 걸릴 수 있으므로 필요시 호출
+        self.scan_bad_blocks() # 초기화 시 Bad Block 스캔 실행
 
     def _initialize_gpio(self):
         """GPIO 핀을 초기화하고 설정합니다."""
         try:
-            GPIO.cleanup()
+            # GPIO.cleanup() # 스크립트 시작 시 한 번만 호출하는 것이 더 안전할 수 있습니다.
             time.sleep(0.01)
             GPIO.setmode(GPIO.BCM)
             GPIO.setwarnings(False)
@@ -182,9 +182,38 @@ class MT29F4G08ABADAWP:
         GPIO.output(self.CE, GPIO.HIGH)
         return status
 
+    def is_bad_block(self, block_no: int) -> bool:
+        """제공된 블록 번호가 Bad Block 목록에 있는지 확인합니다."""
+        return block_no in self.bad_blocks
+
+    def scan_bad_blocks(self):
+        """
+        NAND 칩 전체를 스캔하여 공장 출하 시 표시된 Bad Block을 찾습니다.
+        데이터시트에 따르면, Bad Block의 첫 페이지 첫 바이트는 0xFF가 아닙니다.
+        """
+        print("Bad Block 스캔 시작...")
+        self.bad_blocks.clear()
+        for block_no in range(self.TOTAL_BLOCKS):
+            if block_no % 100 == 0:
+                print(f"  스캔 진행 중: {block_no}/{self.TOTAL_BLOCKS}")
+            
+            page_no = block_no * self.PAGES_PER_BLOCK
+            try:
+                # 첫 페이지만 읽어 Bad Block 마커(0xFF가 아닌 값) 확인
+                first_byte = self.read_page(page_no, length=1)[0]
+                if first_byte != 0xFF:
+                    self.bad_blocks.add(block_no)
+                    print(f"  -> Bad Block 발견: 블록 {block_no} (마커: 0x{first_byte:02X})")
+            except (IOError, TimeoutError, ValueError) as e:
+                # 페이지 읽기 실패 시 해당 블록도 Bad Block으로 간주
+                print(f"  -> 블록 {block_no} 읽기 실패. Bad Block으로 처리. 오류: {e}")
+                self.bad_blocks.add(block_no)
+        print(f"Bad Block 스캔 완료. 총 {len(self.bad_blocks)}개의 Bad Block을 찾았습니다.")
+
+
     def erase_block(self, block_no: int):
         """지정한 블록을 삭제합니다."""
-        if block_no in self.bad_blocks:
+        if self.is_bad_block(block_no):
             print(f"경고: Bad Block {block_no} 삭제 시도 건너뜀.")
             return
 
@@ -210,7 +239,7 @@ class MT29F4G08ABADAWP:
     def read_page(self, page_no: int, length: int = PAGE_SIZE):
         """지정한 페이지에서 데이터를 읽습니다."""
         block_no = page_no // self.PAGES_PER_BLOCK
-        if block_no in self.bad_blocks:
+        if self.is_bad_block(block_no):
             raise ValueError(f"Bad Block {block_no} 읽기 시도.")
 
         addr_bytes = self._build_address(page_no, 0)
@@ -233,7 +262,7 @@ class MT29F4G08ABADAWP:
     def write_page(self, page_no: int, data: bytes):
         """지정한 페이지에 데이터를 씁니다."""
         block_no = page_no // self.PAGES_PER_BLOCK
-        if block_no in self.bad_blocks:
+        if self.is_bad_block(block_no):
             raise ValueError(f"Bad Block {block_no} 쓰기 시도.")
 
         if len(data) > self.PAGE_SIZE:
