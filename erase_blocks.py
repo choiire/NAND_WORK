@@ -96,78 +96,105 @@ def verify_block(nand, block_no: int, pages_to_check: list = None) -> dict:
     }
 
 def erase_and_verify_blocks():
-    """전체 블록을 삭제하고 FF로 초기화되었는지 검증"""
+    """전체 블록을 삭제하고 FF로 초기화되었는지 검증 (2-Plane 최적화 적용)"""
     TOTAL_BLOCKS = 4096  # 4Gb = 4096 blocks
     PAGES_PER_BLOCK = 64
     PAGE_SIZE = 2048
     MAX_RETRIES = 5  # 블록 삭제 최대 재시도 횟수
-    CHUNK_SIZE = 10  # 한 번에 처리할 블록 수
-    
+
     try:
         nand = MT29F4G08ABADAWP()
-        
+
         start_datetime = datetime.now()
-        print(f"\n=== 전체 블록 삭제 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
+        print(f"\n=== 전체 블록 삭제 시작 (2-Plane Erase 최적화 적용, 시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
         print(f"총 {TOTAL_BLOCKS}개 블록 삭제 예정")
-        
+
         errors = []
         processed_blocks = 0
-        
-        # 청크 단위로 처리
-        for chunk_start in range(0, TOTAL_BLOCKS, CHUNK_SIZE):
-            chunk_end = min(chunk_start + CHUNK_SIZE, TOTAL_BLOCKS)
-            chunk_blocks = chunk_end - chunk_start
-            
-            for block_offset in range(chunk_blocks):
-                block = chunk_start + block_offset
-                
-                # Bad Block 체크
-                if nand.is_bad_block(block):
-                    print(f"\n블록 {block}은 Bad Block으로 표시되어 있어 건너뜁니다.")
-                    continue
-                
-                page_no = block * PAGES_PER_BLOCK
-                
-                # 1. 블록 삭제 (최대 5번 재시도)
+
+        # 블록을 2개씩 묶어 처리
+        for block_even in range(0, TOTAL_BLOCKS, 2):
+            block_odd = block_even + 1
+            blocks_to_process_individually = []
+            blocks_to_verify = []
+
+            # 마지막 블록 처리 (총 블록 수가 홀수일 경우)
+            if block_odd >= TOTAL_BLOCKS:
+                if not nand.is_bad_block(block_even):
+                    blocks_to_process_individually.append(block_even)
+                else:
+                    print(f"\n블록 {block_even}은 Bad Block으로 표시되어 있어 건너뜁니다.")
+            else:
+                is_even_bad = nand.is_bad_block(block_even)
+                is_odd_bad = nand.is_bad_block(block_odd)
+
+                # 두 블록 모두 Good Block -> 2-Plane Erase
+                if not is_even_bad and not is_odd_bad:
+                    erase_success = False
+                    for retry in range(MAX_RETRIES):
+                        try:
+                            nand.erase_two_blocks(block_even, block_odd)
+                            erase_success = True
+                            break
+                        except Exception as e:
+                            if retry == MAX_RETRIES - 1:
+                                print(f"\n2-Plane 블록 삭제 실패 ({block_even}, {block_odd}): {str(e)}")
+                                nand.bad_blocks.add(block_even)
+                                nand.bad_blocks.add(block_odd)
+                                errors.append({'block': block_even, 'error': f"2-Plane 삭제 실패: {str(e)}"})
+                                errors.append({'block': block_odd, 'error': f"2-Plane 삭제 실패: {str(e)}"})
+                            else:
+                                print(f"\n2-Plane 블록 삭제 실패 ({block_even}, {block_odd}), 재시도 중... ({retry + 1}/{MAX_RETRIES})")
+                                time.sleep(0.1)
+                    if erase_success:
+                        blocks_to_verify.extend([block_even, block_odd])
+                # 하나라도 Bad Block -> 단일 Erase
+                else:
+                    if not is_even_bad:
+                        blocks_to_process_individually.append(block_even)
+                    else:
+                        print(f"\n블록 {block_even}은 Bad Block으로 표시되어 있어 건너뜁니다.")
+
+                    if not is_odd_bad:
+                        blocks_to_process_individually.append(block_odd)
+                    else:
+                        print(f"\n블록 {block_odd}은 Bad Block으로 표시되어 있어 건너뜁니다.")
+
+            # 단일 블록 처리
+            for block in blocks_to_process_individually:
                 erase_success = False
                 for retry in range(MAX_RETRIES):
                     try:
-                        nand.erase_block(page_no)
+                        nand.erase_block(block)
                         erase_success = True
                         break
                     except Exception as e:
                         if retry == MAX_RETRIES - 1:
                             print(f"\n블록 {block} 삭제 실패 (최대 재시도 횟수 초과): {str(e)}")
-                            nand.mark_bad_block(block)
-                            errors.append({
-                                'block': block,
-                                'error': f"삭제 실패: {str(e)}"
-                            })
+                            nand.bad_blocks.add(block)
+                            errors.append({'block': block, 'error': f"삭제 실패: {str(e)}"})
                         else:
                             print(f"\n블록 {block} 삭제 실패, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
                             time.sleep(0.1)
-                
-                if not erase_success:
-                    continue
-                
-                # 2. 블록 검증
+                if erase_success:
+                    blocks_to_verify.append(block)
+
+            # 검증
+            for block in blocks_to_verify:
                 verify_result = verify_block(nand, block)
                 if not verify_result['success']:
+                    error_info = {'block': block, 'errors': verify_result.get('errors', [])}
                     if 'error' in verify_result:
-                        print(f"\n블록 {block} 검증 실패: {verify_result['error']}")
-                    else:
-                        print(f"\n블록 {block} 검증 실패: 초기화 오류")
-                    nand.mark_bad_block(block)
-                    errors.append({
-                        'block': block,
-                        'errors': verify_result.get('errors', [])
-                    })
-                
-                processed_blocks += 1
-                if processed_blocks % 10 == 0:
-                    sys.stdout.write(f"\r작업 중: {processed_blocks}/{TOTAL_BLOCKS} 블록")
-                    sys.stdout.flush()
-        
+                        error_info['error'] = verify_result['error']
+                    errors.append(error_info)
+                    nand.bad_blocks.add(block)
+                    print(f"\n블록 {block} 검증 실패. Bad Block으로 마킹합니다.")
+
+            processed_blocks += 2 if block_odd < TOTAL_BLOCKS else 1
+            if processed_blocks % 10 < 2:
+                sys.stdout.write(f"\r작업 중: {processed_blocks}/{TOTAL_BLOCKS} 블록")
+                sys.stdout.flush()
+
         # 3. 결과 출력
         end_datetime = datetime.now()
         duration = end_datetime - start_datetime

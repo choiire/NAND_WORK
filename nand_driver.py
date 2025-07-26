@@ -2,11 +2,11 @@
 import RPi.GPIO as GPIO
 import time
 
-class MT29F4G08ABADAWP:
+class MT2F4G08ABADAWP:
     """
     Micron MT29F4G08ABADAWP NAND Flash 드라이버 (Raspberry Pi 5 용)
     - 비동기식 인터페이스 제어
-    - 안정성 및 데이터시트 준수를 위한 개선 사항 포함
+    - 2-Plane Erase 최적화 기능 추가
     """
     # NAND 플래시 상수 (데이터시트 기반)
     PAGE_SIZE = 2048
@@ -14,9 +14,7 @@ class MT29F4G08ABADAWP:
     PAGES_PER_BLOCK = 64
     TOTAL_BLOCKS = 4096
 
-    # 타이밍 상수 (단위: 초) - 실제 시스템에서는 더 정밀한 지연 필요
-    # Python의 time.sleep()은 ns 단위 정밀도를 보장하지 못하므로
-    # 최소한의 지연을 보장하기 위한 값으로 사용합니다.
+    # 타이밍 상수 (단위: 초)
     T_WB_S = 100 / 1_000_000_000  # 100ns
     T_WC_S = 25 / 1_000_000_000   # 25ns
     T_ADL_S = 100 / 1_000_000_000 # 100ns (데이터시트 tADL은 70ns 이상)
@@ -26,38 +24,34 @@ class MT29F4G08ABADAWP:
 
     def __init__(self):
         # GPIO 핀 설정 (BCM 모드)
-        self.RB = 13  # Ready/Busy (Input, Pull-up)
-        self.RE = 26  # Read Enable (Output)
-        self.CE = 19  # Chip Enable (Output)
-        self.CLE = 11 # Command Latch Enable (Output)
-        self.ALE = 10 # Address Latch Enable (Output)
-        self.WE = 9   # Write Enable (Output)
-        self.IO_pins = [21, 20, 16, 12, 25, 24, 23, 18] # IO0-IO7
+        self.RB = 13
+        self.RE = 26
+        self.CE = 19
+        self.CLE = 11
+        self.ALE = 10
+        self.WE = 9
+        self.IO_pins = [21, 20, 16, 12, 25, 24, 23, 18]
 
         self.bad_blocks = set()
         self._initialize_gpio()
         self.power_on_sequence()
-        self.scan_bad_blocks() # 초기화 시 Bad Block 스캔 실행
+        self.scan_bad_blocks()
 
     def _initialize_gpio(self):
         """GPIO 핀을 초기화하고 설정합니다."""
         try:
-            # GPIO.cleanup() # 스크립트 시작 시 한 번만 호출하는 것이 더 안전할 수 있습니다.
+            # 스크립트 시작 시 GPIO 상태를 초기화합니다.
+            # GPIO.cleanup() # 다른 스크립트와 함께 사용할 경우 충돌을 막기 위해 주석 처리할 수 있습니다.
             time.sleep(0.01)
             GPIO.setmode(GPIO.BCM)
             GPIO.setwarnings(False)
-
-            # 제어 핀 설정
             GPIO.setup(self.RB, GPIO.IN, pull_up_down=GPIO.PUD_UP)
             control_pins = [self.RE, self.CE, self.WE]
             for pin in control_pins:
                 GPIO.setup(pin, GPIO.OUT, initial=GPIO.HIGH)
-            
             latch_pins = [self.CLE, self.ALE]
             for pin in latch_pins:
                 GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
-
-            # 데이터 핀을 기본 출력 모드로 설정
             self.set_data_pins_output()
             print("GPIO 초기화 완료.")
         except Exception as e:
@@ -69,7 +63,6 @@ class MT29F4G08ABADAWP:
         print("GPIO 리소스를 정리합니다.")
         GPIO.cleanup()
 
-    # --- Low-Level GPIO Control ---
     def set_data_pins_output(self):
         for pin in self.IO_pins:
             GPIO.setup(pin, GPIO.OUT)
@@ -79,12 +72,10 @@ class MT29F4G08ABADAWP:
             GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_OFF)
 
     def _write_to_bus(self, value):
-        """8비트 값을 데이터 버스에 씁니다."""
         for i in range(8):
             GPIO.output(self.IO_pins[i], (value >> i) & 1)
 
     def _read_from_bus(self):
-        """데이터 버스에서 8비트 값을 읽습니다."""
         value = 0
         for i in range(8):
             if GPIO.input(self.IO_pins[i]):
@@ -92,7 +83,6 @@ class MT29F4G08ABADAWP:
         return value
 
     def _strobe_we(self):
-        """WE# 핀을 토글하여 쓰기 동작을 수행합니다."""
         time.sleep(self.T_WC_S)
         GPIO.output(self.WE, GPIO.LOW)
         time.sleep(self.T_WC_S)
@@ -100,7 +90,6 @@ class MT29F4G08ABADAWP:
         time.sleep(self.T_WC_S)
         
     def _strobe_re(self):
-        """RE# 핀을 토글하여 읽기 동작을 수행하고 값을 반환합니다."""
         time.sleep(self.T_WC_S)
         GPIO.output(self.RE, GPIO.LOW)
         time.sleep(self.T_WC_S)
@@ -110,7 +99,6 @@ class MT29F4G08ABADAWP:
         return val
 
     def wait_ready(self, timeout_s=0.1):
-        """R/B# 핀이 Ready(HIGH) 상태가 될 때까지 대기합니다."""
         time.sleep(self.T_WB_S)
         start_time = time.time()
         while GPIO.input(self.RB) == GPIO.LOW:
@@ -118,7 +106,6 @@ class MT29F4G08ABADAWP:
                 raise TimeoutError("NAND Flash가 Ready 상태로 전환되지 않았습니다 (타임아웃).")
         return
 
-    # --- NAND Command & Address Functions ---
     def send_command(self, cmd):
         GPIO.output(self.CLE, GPIO.HIGH)
         self._write_to_bus(cmd)
@@ -133,7 +120,6 @@ class MT29F4G08ABADAWP:
         GPIO.output(self.ALE, GPIO.LOW)
 
     def _build_address(self, page_no, col_addr=0):
-        """페이지 및 컬럼 주소로부터 5바이트 주소 배열을 생성합니다."""
         addr_bytes = []
         addr_bytes.append(col_addr & 0xFF)
         addr_bytes.append((col_addr >> 8) & 0xFF)
@@ -142,12 +128,10 @@ class MT29F4G08ABADAWP:
         addr_bytes.append((page_no >> 16) & 0xFF)
         return addr_bytes
 
-    # --- High-Level NAND Operations ---
     def power_on_sequence(self):
-        """전원 인가 후 리셋 시퀀스를 수행합니다."""
         try:
             GPIO.output(self.CE, GPIO.HIGH)
-            time.sleep(0.001) # 1ms
+            time.sleep(0.001)
             GPIO.output(self.CE, GPIO.LOW)
             self.reset()
             print("NAND 칩 리셋 완료.")
@@ -155,135 +139,144 @@ class MT29F4G08ABADAWP:
              raise RuntimeError(f"파워온 시퀀스 실패: {e}")
 
     def reset(self):
-        """NAND 칩을 리셋합니다."""
         self.send_command(0xFF)
         self.wait_ready()
 
     def read_id(self):
-        """칩 ID를 읽습니다."""
         GPIO.output(self.CE, GPIO.LOW)
         self.send_command(0x90)
         self.send_address([0x00])
-        
         self.set_data_pins_input()
         id_bytes = [self._strobe_re() for _ in range(5)]
         self.set_data_pins_output()
-        
         GPIO.output(self.CE, GPIO.HIGH)
         return bytes(id_bytes)
 
     def check_status(self):
-        """칩의 상태를 읽습니다."""
         GPIO.output(self.CE, GPIO.LOW)
         self.send_command(0x70)
         self.set_data_pins_input()
-        status = self._strobe_re()
+        status = self._read_from_bus()
         self.set_data_pins_output()
         GPIO.output(self.CE, GPIO.HIGH)
         return status
 
     def is_bad_block(self, block_no: int) -> bool:
-        """제공된 블록 번호가 Bad Block 목록에 있는지 확인합니다."""
         return block_no in self.bad_blocks
 
     def scan_bad_blocks(self):
-        """
-        NAND 칩 전체를 스캔하여 공장 출하 시 표시된 Bad Block을 찾습니다.
-        데이터시트에 따르면, Bad Block의 첫 페이지 첫 바이트는 0xFF가 아닙니다.
-        """
         print("Bad Block 스캔 시작...")
         self.bad_blocks.clear()
         for block_no in range(self.TOTAL_BLOCKS):
             if block_no % 100 == 0:
                 print(f"  스캔 진행 중: {block_no}/{self.TOTAL_BLOCKS}")
-            
             page_no = block_no * self.PAGES_PER_BLOCK
             try:
-                # 첫 페이지만 읽어 Bad Block 마커(0xFF가 아닌 값) 확인
                 first_byte = self.read_page(page_no, length=1)[0]
                 if first_byte != 0xFF:
                     self.bad_blocks.add(block_no)
                     print(f"  -> Bad Block 발견: 블록 {block_no} (마커: 0x{first_byte:02X})")
             except (IOError, TimeoutError, ValueError) as e:
-                # 페이지 읽기 실패 시 해당 블록도 Bad Block으로 간주
                 print(f"  -> 블록 {block_no} 읽기 실패. Bad Block으로 처리. 오류: {e}")
                 self.bad_blocks.add(block_no)
         print(f"Bad Block 스캔 완료. 총 {len(self.bad_blocks)}개의 Bad Block을 찾았습니다.")
 
-
     def erase_block(self, block_no: int):
-        """지정한 블록을 삭제합니다."""
+        """지정한 단일 블록을 삭제합니다."""
         if self.is_bad_block(block_no):
-            print(f"경고: Bad Block {block_no} 삭제 시도 건너뜀.")
+            # print(f"경고: Bad Block {block_no} 삭제 시도 건너뜀.")
             return
-
         page_no = block_no * self.PAGES_PER_BLOCK
-        addr_bytes = self._build_address(page_no)[2:] # 블록 주소는 Row 주소만 사용
-
+        addr_bytes = self._build_address(page_no)[2:]
         try:
             GPIO.output(self.CE, GPIO.LOW)
             self.send_command(0x60)
             self.send_address(addr_bytes)
             self.send_command(0xD0)
-            
-            self.wait_ready(timeout_s=self.T_BERS_MAX_S * 1.2) # 타임아웃을 넉넉하게 설정
-            
+            self.wait_ready(timeout_s=self.T_BERS_MAX_S * 1.2)
             status = self.check_status()
-            if status & 0x01: # 실패 비트 확인
+            if status & 0x01:
                 print(f"블록 {block_no} 삭제 실패. Bad Block으로 마킹합니다.")
                 self.bad_blocks.add(block_no)
                 raise IOError(f"블록 {block_no} 삭제 실패.")
         finally:
             GPIO.output(self.CE, GPIO.HIGH)
             
+    def erase_two_blocks(self, block_even: int, block_odd: int):
+        """
+        [최적화] 2-Plane Erase 기능을 사용하여 짝수 블록과 홀수 블록을 동시에 삭제합니다.
+        """
+        if block_even % 2 != 0 or block_odd % 2 == 0:
+            raise ValueError("첫 번째 인자는 짝수 블록, 두 번째 인자는 홀수 블록이어야 합니다.")
+        if self.is_bad_block(block_even) or self.is_bad_block(block_odd):
+            # print(f"경고: Bad Block {block_even} 또는 {block_odd}이 포함되어 2-Plane 삭제를 건너뛰고 단일 삭제를 시도합니다.")
+            if not self.is_bad_block(block_even): self.erase_block(block_even)
+            if not self.is_bad_block(block_odd): self.erase_block(block_odd)
+            return
+
+        page_even = block_even * self.PAGES_PER_BLOCK
+        addr_even = self._build_address(page_even)[2:]
+        page_odd = block_odd * self.PAGES_PER_BLOCK
+        addr_odd = self._build_address(page_odd)[2:]
+
+        try:
+            GPIO.output(self.CE, GPIO.LOW)
+            # 1. 첫 번째 플레인(짝수 블록) 설정
+            self.send_command(0x60)
+            self.send_address(addr_even)
+            self.send_command(0xD1)
+            self.wait_ready(timeout_s=0.001) 
+
+            # 2. 두 번째 플레인(홀수 블록) 설정 및 동시 삭제 시작
+            self.send_command(0x60)
+            self.send_address(addr_odd)
+            self.send_command(0xD0)
+            self.wait_ready(timeout_s=self.T_BERS_MAX_S * 1.2)
+            
+            status = self.check_status()
+            if status & 0x01:
+                print(f"2-Plane 블록 삭제 실패: ({block_even}, {block_odd}). Bad Block으로 마킹합니다.")
+                self.bad_blocks.add(block_even)
+                self.bad_blocks.add(block_odd)
+                raise IOError(f"2-Plane 블록 삭제 실패: ({block_even}, {block_odd})")
+        finally:
+            GPIO.output(self.CE, GPIO.HIGH)
+
     def read_page(self, page_no: int, length: int = PAGE_SIZE):
-        """지정한 페이지에서 데이터를 읽습니다."""
         block_no = page_no // self.PAGES_PER_BLOCK
         if self.is_bad_block(block_no):
             raise ValueError(f"Bad Block {block_no} 읽기 시도.")
-
         addr_bytes = self._build_address(page_no, 0)
-
         try:
             GPIO.output(self.CE, GPIO.LOW)
             self.send_command(0x00)
             self.send_address(addr_bytes)
             self.send_command(0x30)
             self.wait_ready(timeout_s=self.T_R_MAX_S * 1.2)
-
             self.set_data_pins_input()
             data = bytes([self._strobe_re() for _ in range(length)])
             self.set_data_pins_output()
-            
             return data
         finally:
             GPIO.output(self.CE, GPIO.HIGH)
 
     def write_page(self, page_no: int, data: bytes):
-        """지정한 페이지에 데이터를 씁니다."""
         block_no = page_no // self.PAGES_PER_BLOCK
         if self.is_bad_block(block_no):
             raise ValueError(f"Bad Block {block_no} 쓰기 시도.")
-
         if len(data) > self.PAGE_SIZE:
             raise ValueError(f"데이터 크기가 페이지 크기({self.PAGE_SIZE} bytes)를 초과합니다.")
-
         addr_bytes = self._build_address(page_no, 0)
-        
         try:
             GPIO.output(self.CE, GPIO.LOW)
             self.send_command(0x80)
             self.send_address(addr_bytes)
-            
-            # 데이터 쓰기
             time.sleep(self.T_ADL_S)
             for byte in data:
                 self._write_to_bus(byte)
                 self._strobe_we()
-            
             self.send_command(0x10)
             self.wait_ready(timeout_s=self.T_PROG_MAX_S * 1.2)
-            
             status = self.check_status()
             if status & 0x01:
                 print(f"페이지 {page_no} 쓰기 실패. 블록 {block_no}을 Bad Block으로 마킹합니다.")
@@ -291,57 +284,3 @@ class MT29F4G08ABADAWP:
                 raise IOError(f"페이지 {page_no} 쓰기 실패.")
         finally:
             GPIO.output(self.CE, GPIO.HIGH)
-
-# --- 사용 예제 ---
-if __name__ == '__main__':
-    try:
-        nand = MT29F4G08ABADAWP()
-        
-        # 1. 칩 ID 읽기
-        chip_id = nand.read_id()
-        print(f"NAND 칩 ID: {chip_id.hex()}")
-        if chip_id[0] != 0x2c: # Micron Manufacturer ID
-            print("경고: Micron 칩이 아닌 것 같거나 통신 오류가 있습니다.")
-
-        # 2. 특정 블록 삭제 (예: 블록 10)
-        target_block = 10
-        print(f"\n블록 {target_block} 삭제 시도...")
-        nand.erase_block(target_block)
-        print(f"블록 {target_block} 삭제 완료.")
-
-        # 3. 삭제된 블록의 첫 페이지 읽어서 0xFF로 채워졌는지 확인
-        target_page = target_block * MT29F4G08ABADAWP.PAGES_PER_BLOCK
-        print(f"\n페이지 {target_page} (블록 {target_block}의 첫 페이지) 검증...")
-        read_data = nand.read_page(target_page, 32) # 앞 32바이트만 확인
-        
-        if all(b == 0xFF for b in read_data):
-            print(f"검증 성공: 페이지가 0xFF로 초기화되었습니다.")
-            print(f"읽은 데이터 (앞 32바이트): {read_data.hex()}")
-        else:
-            print(f"검증 실패: 페이지가 0xFF로 초기화되지 않았습니다.")
-            print(f"읽은 데이터 (앞 32바이트): {read_data.hex()}")
-
-        # 4. 특정 페이지에 데이터 쓰기
-        write_data = b'Hello, NAND Flash! This is a test.' + b'\x00' * 500
-        print(f"\n페이지 {target_page}에 데이터 쓰기 시도...")
-        nand.write_page(target_page, write_data)
-        print("쓰기 완료.")
-
-        # 5. 쓴 데이터 다시 읽어서 확인
-        print(f"\n페이지 {target_page}에서 데이터 다시 읽어서 검증...")
-        read_back_data = nand.read_page(target_page, len(write_data))
-        
-        if read_back_data == write_data:
-            print("쓰기/읽기 검증 성공!")
-        else:
-            print("쓰기/읽기 검증 실패!")
-            print(f"원본 데이터: {write_data.hex()}")
-            print(f"읽은 데이터: {read_back_data.hex()}")
-
-    except (RuntimeError, IOError, TimeoutError) as e:
-        print(f"\n오류 발생: {e}")
-    except KeyboardInterrupt:
-        print("\n사용자에 의해 프로그램이 중단되었습니다.")
-    finally:
-        GPIO.cleanup()
-        print("\nGPIO가 정리되었습니다. 프로그램을 종료합니다.")
