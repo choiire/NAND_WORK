@@ -387,7 +387,7 @@ class MT29F4G08ABADAWP:
         raise RuntimeError("사용 가능한 블록이 없습니다")
 
     def write_page(self, page_no: int, data: bytes):
-        """한 페이지 쓰기 (ECC 적용)"""
+        """한 페이지 쓰기 (ECC 적용) - 데이터시트 사양 준수"""
         try:
             self.validate_page(page_no)
             block_no = page_no // self.PAGES_PER_BLOCK
@@ -406,41 +406,67 @@ class MT29F4G08ABADAWP:
                 encoded = self.hamming_encode(list(chunk))
                 encoded_data.extend(encoded)
             
-            # 원래의 write_page 로직
+            # 데이터시트 PROGRAM PAGE (80h-10h) 시퀀스
             self.set_data_pins_output()
+            
+            # [1] 쓰기 시작 명령 (80h)
             self.write_command(0x80)
             
+            # [2] 주소 전송 (5사이클) - 데이터시트 순서 준수
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
             GPIO.output(self.ALE, GPIO.HIGH)
             
-            # Column Address (0x0000)
+            # 1~2번째 바이트: 컬럼 주소 (페이지 내 시작 위치)
+            # 컬럼 주소 하위 바이트
             GPIO.output(self.WE, GPIO.LOW)
+            time.sleep(0.00001)  # tWP (WE# pulse width): 10ns 최소
             self.write_data(0x00)
+            time.sleep(0.00001)
             GPIO.output(self.WE, GPIO.HIGH)
+            time.sleep(0.00001)  # tWH (WE# high hold time)
             
+            # 컬럼 주소 상위 바이트  
             GPIO.output(self.WE, GPIO.LOW)
+            time.sleep(0.00001)
             self.write_data(0x00)
+            time.sleep(0.00001)
             GPIO.output(self.WE, GPIO.HIGH)
+            time.sleep(0.00001)
             
-            # Row Address (3바이트)
+            # 3~5번째 바이트: 로우 주소 (블록 및 페이지)
             for i in range(3):
                 GPIO.output(self.WE, GPIO.LOW)
+                time.sleep(0.00001)
                 self.write_data((page_no >> (8 * i)) & 0xFF)
+                time.sleep(0.00001)
                 GPIO.output(self.WE, GPIO.HIGH)
+                time.sleep(0.00001)
                 
+            GPIO.output(self.ALE, GPIO.LOW)
+            time.sleep(0.0001)  # tADL (ALE to data loading time): 100ns
+            
+            # [3] 데이터 전송
+            GPIO.output(self.CLE, GPIO.LOW)
             GPIO.output(self.ALE, GPIO.LOW)
             
             # 인코딩된 데이터 쓰기
             for byte in encoded_data:
                 GPIO.output(self.WE, GPIO.LOW)
+                time.sleep(0.00001)  # tWP
                 self.write_data(byte)
+                time.sleep(0.00001)
                 GPIO.output(self.WE, GPIO.HIGH)
+                time.sleep(0.00001)  # tWH
                 
+            # [4] 쓰기 확정 명령 (10h)
             self.write_command(0x10)
+            
+            # [5] tPROG 대기 (최대 600µs)
+            time.sleep(0.0006)  # 600µs 대기
             self.wait_ready()
             
-            # 쓰기 검증
+            # [6] 상태 확인
             if not self.check_operation_status():
                 self.mark_bad_block(block_no)
                 raise RuntimeError("페이지 쓰기 실패")
@@ -452,7 +478,7 @@ class MT29F4G08ABADAWP:
             self.set_data_pins_output()
 
     def read_page(self, page_no: int, length: int = 2048):
-        """한 페이지 읽기 (ECC 적용)"""
+        """한 페이지 읽기 (ECC 적용) - 데이터시트 사양 준수"""
         try:
             self.validate_page(page_no)
             block_no = page_no // self.PAGES_PER_BLOCK
@@ -461,48 +487,80 @@ class MT29F4G08ABADAWP:
             if self.is_bad_block(block_no):
                 raise RuntimeError(f"Bad Block 접근 시도: 블록 {block_no}")
             
-            # 원래의 read_page 로직으로 데이터 읽기
+            # 데이터시트 READ PAGE (00h-30h) 시퀀스
+            # [1] 읽기 시작 명령 (00h)
             self.write_command(0x00)
             
+            # [2] 주소 전송 (5사이클) - 데이터시트 순서 준수
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
             GPIO.output(self.ALE, GPIO.HIGH)
             
-            # Column Address
+            # 1~2번째 바이트: 컬럼 주소
             GPIO.output(self.WE, GPIO.LOW)
+            time.sleep(0.00001)
             self.write_data(0x00)
+            time.sleep(0.00001)
             GPIO.output(self.WE, GPIO.HIGH)
+            time.sleep(0.00001)
             
             GPIO.output(self.WE, GPIO.LOW)
+            time.sleep(0.00001)
             self.write_data(0x00)
+            time.sleep(0.00001)
             GPIO.output(self.WE, GPIO.HIGH)
+            time.sleep(0.00001)
             
-            # Row Address
+            # 3~5번째 바이트: 로우 주소
             for i in range(3):
                 GPIO.output(self.WE, GPIO.LOW)
+                time.sleep(0.00001)
                 self.write_data((page_no >> (8 * i)) & 0xFF)
+                time.sleep(0.00001)
                 GPIO.output(self.WE, GPIO.HIGH)
+                time.sleep(0.00001)
                 
             GPIO.output(self.ALE, GPIO.LOW)
+            time.sleep(0.0001)  # tADL
             
+            # [3] 읽기 확정 명령 (30h)
             self.write_command(0x30)
+            
+            # [4] tR 대기 (최대 25µs)
+            time.sleep(0.000025)  # 25µs 대기
             self.wait_ready()
             
+            # [5] 데이터 읽기 준비
             self.set_data_pins_input()
+            GPIO.output(self.CLE, GPIO.LOW)
+            GPIO.output(self.ALE, GPIO.LOW)
             
             # 첫 바이트만 읽을 경우 ECC 없이 직접 읽기
             if length == 1:
-                GPIO.output(self.RE, GPIO.LOW)
-                byte = self.read_data()
-                GPIO.output(self.RE, GPIO.HIGH)
+                # RE# 토글: HIGH -> LOW -> HIGH (데이터시트 사양)
+                GPIO.output(self.RE, GPIO.HIGH)  # 초기 상태 확인
+                time.sleep(0.00001)
+                GPIO.output(self.RE, GPIO.LOW)   # LOW로 토글 (데이터 출력)
+                time.sleep(0.00001)              # tREA (RE# access time)
+                byte = self.read_data()          # 데이터 읽기
+                time.sleep(0.00001)
+                GPIO.output(self.RE, GPIO.HIGH)  # HIGH로 복원
                 return bytes([byte])
             
-            # ECC 적용된 데이터 읽기
+            # [6] 전체 페이지 데이터 읽기
             encoded_data = []
-            for _ in range(length + (length // 256) * 32):  # ECC 오버헤드 포함
-                GPIO.output(self.RE, GPIO.LOW)
-                byte = self.read_data()
-                GPIO.output(self.RE, GPIO.HIGH)
+            total_bytes = length + (length // 256) * 32  # ECC 오버헤드 포함
+            
+            for _ in range(total_bytes):
+                # RE# 토글 시퀀스 (데이터시트 사양)
+                GPIO.output(self.RE, GPIO.HIGH)  # 시작 상태
+                time.sleep(0.00001)              # tRHZ (RE# high to output hi-z)
+                GPIO.output(self.RE, GPIO.LOW)   # LOW로 토글
+                time.sleep(0.00001)              # tREA (RE# access time) 
+                byte = self.read_data()          # 데이터 읽기
+                time.sleep(0.00001)              # tRH (RE# high hold time)
+                GPIO.output(self.RE, GPIO.HIGH)  # HIGH로 복원
+                time.sleep(0.00001)              # tRHZ
                 encoded_data.append(byte)
             
             # ECC 디코딩 및 오류 수정
