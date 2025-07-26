@@ -282,8 +282,21 @@ def program_nand():
         TIMEOUT_SECONDS = 5
         
         start_datetime = datetime.now()
+        error_log_filename = f"program_errors_{start_datetime.strftime('%Y%m%d_%H%M%S')}.txt"
+        
         print(f"\n=== 프로그래밍 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
         print(f"총 {total_files}개 파일 프로그래밍 예정")
+        print(f"오류 로그 파일: {error_log_filename}")
+        
+        # 초기 진행률 표시
+        sys.stdout.write("\033[K")  # 현재 줄 지우기
+        sys.stdout.write("\r진행률: 0% (0/{total_files}) - 예상 남은 시간: 계산 중...")
+        sys.stdout.flush()
+        
+        # 작업 시간 추적을 위한 변수들
+        last_update_time = time.time()
+        files_since_update = 0
+        avg_time_per_file = None
         
         for filename in files:
             try:
@@ -295,11 +308,6 @@ def program_nand():
                 address = hex_to_int(filename.split('.')[0])
                 page_no = calculate_page_number(address)
                 block_no = page_no // 64
-                
-                # 디버깅 정보 출력
-                print(f"\n현재 작업: {filename}")
-                print(f"주소: 0x{address:08X}")
-                print(f"페이지: {page_no} (블록 {block_no})")
                 
                 # 데이터 읽기
                 with open(filepath, 'rb') as f:
@@ -335,7 +343,7 @@ def program_nand():
                                             if len(mismatch_positions) >= 5:  # 최대 5개까지만 기록
                                                 break
                                     
-                                    raise ValueError(
+                                    error_msg = (
                                         f"데이터 검증 실패:\n" + 
                                         "\n".join([
                                             f"  오프셋 0x{m['offset']:04X}: "
@@ -344,6 +352,7 @@ def program_nand():
                                             for m in mismatch_positions
                                         ])
                                     )
+                                    raise ValueError(error_msg)
                                 
                                 success = True
                                 break
@@ -356,26 +365,71 @@ def program_nand():
                         
                     except Exception as e:
                         if retry == MAX_RETRIES - 1:
-                            print(f"\n파일 '{filename}' 프로그래밍/검증 실패 (최대 재시도 횟수 초과): {str(e)}")
+                            error_msg = f"\n파일 '{filename}' 프로그래밍/검증 실패 (최대 재시도 횟수 초과):\n"
+                            error_msg += f"주소: 0x{address:08X}\n"
+                            error_msg += f"페이지: {page_no} (블록 {block_no})\n"
+                            error_msg += f"오류: {str(e)}"
+                            
+                            # 오류를 파일에 즉시 기록
+                            with open(error_log_filename, 'a', encoding='utf-8') as f:
+                                f.write(f"\n=== {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                                f.write(error_msg + "\n")
+                            
                             failed_files.append({
                                 'file': filename,
                                 'error': str(e)
                             })
+                            print(f"\n{error_msg}")
                         else:
                             print(f"\n파일 '{filename}' 프로그래밍/검증 실패, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
                             time.sleep(0.5)  # 재시도 간격 증가
                 
                 if success:
                     processed_files += 1
-                    sys.stdout.write(f"\r작업 중: {processed_files}/{total_files} - {filename}")
-                    sys.stdout.flush()
+                    files_since_update += 1
+                    
+                    # 진행률 및 예상 시간 업데이트 (1초에 한 번만)
+                    current_time = time.time()
+                    if current_time - last_update_time >= 1.0:
+                        # 평균 처리 시간 계산
+                        time_per_batch = (current_time - last_update_time) / files_since_update
+                        if avg_time_per_file is None:
+                            avg_time_per_file = time_per_batch
+                        else:
+                            avg_time_per_file = (avg_time_per_file * 0.7) + (time_per_batch * 0.3)
+                        
+                        # 남은 시간 계산
+                        remaining_files = total_files - processed_files
+                        remaining_seconds = remaining_files * avg_time_per_file
+                        remaining_minutes = int(remaining_seconds / 60)
+                        
+                        # 진행률 표시 업데이트
+                        progress = (processed_files / total_files) * 100
+                        sys.stdout.write("\033[K")  # 현재 줄 지우기
+                        sys.stdout.write(f"\r진행률: {progress:.1f}% ({processed_files}/{total_files}) - "
+                                       f"예상 남은 시간: {remaining_minutes}분")
+                        sys.stdout.flush()
+                        
+                        # 업데이트 관련 변수 초기화
+                        last_update_time = current_time
+                        files_since_update = 0
                 
             except Exception as e:
-                print(f"\n파일 '{filename}' 프로그래밍 중 오류 발생: {str(e)}")
+                error_msg = f"\n파일 '{filename}' 프로그래밍 중 오류 발생:\n"
+                error_msg += f"주소: 0x{address:08X}\n"
+                error_msg += f"페이지: {page_no} (블록 {block_no})\n"
+                error_msg += f"오류: {str(e)}"
+                
+                # 오류를 파일에 즉시 기록
+                with open(error_log_filename, 'a', encoding='utf-8') as f:
+                    f.write(f"\n=== {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                    f.write(error_msg + "\n")
+                
                 failed_files.append({
                     'file': filename,
                     'error': str(e)
                 })
+                print(f"\n{error_msg}")
         
         end_datetime = datetime.now()
         duration = end_datetime - start_datetime
@@ -386,29 +440,7 @@ def program_nand():
             return True
         else:
             print(f"결과: {len(failed_files)}개 파일에서 문제 발생")
-            
-            # 오류 로그 파일 저장
-            log_filename = f"program_errors_{start_datetime.strftime('%Y%m%d_%H%M%S')}.txt"
-            with open(log_filename, 'w', encoding='utf-8') as f:
-                f.write(f"=== NAND 프로그래밍 오류 로그 ===\n")
-                f.write(f"시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"종료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"소요 시간: {duration}\n")
-                f.write(f"총 오류 파일 수: {len(failed_files)}\n\n")
-                
-                for error in failed_files:
-                    f.write(f"\n파일: {error['file']}\n")
-                    f.write(f"  {error['error']}\n")
-            
-            print(f"\n오류 상세 내역이 {log_filename} 파일에 저장되었습니다.")
-            
-            # 처음 5개의 오류만 화면에 출력
-            for error in failed_files[:5]:
-                print(f"\n파일: {error['file']}")
-                print(f"  {error['error']}")
-            
-            if len(failed_files) > 5:
-                print(f"\n... 외 {len(failed_files)-5}개 파일에서 문제 발생")
+            print(f"자세한 오류 내역은 {error_log_filename} 파일을 참고하세요.")
             return False
             
     except Exception as e:
