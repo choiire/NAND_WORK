@@ -66,7 +66,7 @@ def validate_directory(dirpath: str) -> None:
         raise NotADirectoryError(f"유효한 디렉토리가 아님: {dirpath}")
 
 def erase_all_blocks(nand):
-    """전체 블록 삭제"""
+    """전체 블록 삭제 (Bad Block 포함)"""
     TOTAL_BLOCKS = 4096  # 4Gb = 4096 blocks
     PAGES_PER_BLOCK = 64
     MAX_RETRIES = 5  # 블록 삭제 최대 재시도 횟수
@@ -75,7 +75,7 @@ def erase_all_blocks(nand):
     
     start_datetime = datetime.now()
     print(f"\n=== 전체 블록 삭제 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
-    print(f"총 {TOTAL_BLOCKS}개 블록 삭제 예정")
+    print(f"총 {TOTAL_BLOCKS}개 블록 삭제 예정 (Bad Block 포함)")
     
     errors = []
     processed_blocks = 0
@@ -88,12 +88,6 @@ def erase_all_blocks(nand):
             
             for block_offset in range(chunk_blocks):
                 block = chunk_start + block_offset
-                
-                # Bad Block 체크
-                if nand.is_bad_block(block):
-                    print(f"\n블록 {block}은 Bad Block으로 표시되어 있어 건너뜁니다.")
-                    continue
-                
                 page_no = block * PAGES_PER_BLOCK
                 
                 # 블록 삭제 (최대 5번 재시도)
@@ -114,7 +108,6 @@ def erase_all_blocks(nand):
                     except Exception as e:
                         if retry == MAX_RETRIES - 1:
                             print(f"\n블록 {block} 삭제 실패 (최대 재시도 횟수 초과): {str(e)}")
-                            nand.mark_bad_block(block)
                             errors.append({
                                 'block': block,
                                 'error': f"삭제 실패: {str(e)}"
@@ -131,14 +124,12 @@ def erase_all_blocks(nand):
                     data = nand.read_page(page_no)
                     if not all(b == 0xFF for b in data):
                         print(f"\n블록 {block} 검증 실패: 초기화 오류")
-                        nand.mark_bad_block(block)
                         errors.append({
                             'block': block,
                             'error': "검증 실패: FF로 초기화되지 않음"
                         })
                 except Exception as e:
                     print(f"\n블록 {block} 검증 실패: {str(e)}")
-                    nand.mark_bad_block(block)
                     errors.append({
                         'block': block,
                         'error': f"검증 실패: {str(e)}"
