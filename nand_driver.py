@@ -28,28 +28,37 @@ class MT29F4G08ABADAWP:
         
         # Bad Block 테이블 초기화
         self.bad_blocks = set()
-        self.scan_bad_blocks()
 
         try:
             # GPIO 초기화
-            GPIO.setmode(GPIO.BCM)
+            GPIO.cleanup()  # 이전 설정 초기화
+            time.sleep(0.1)  # 초기화 후 잠시 대기
+            
+            GPIO.setmode(GPIO.BCM)  # BCM 모드로 명시적 설정
             GPIO.setwarnings(False)
             
             # 컨트롤 핀 출력으로 설정
-            GPIO.setup(self.RB, GPIO.IN)
-            GPIO.setup(self.RE, GPIO.OUT)
-            GPIO.setup(self.CE, GPIO.OUT) 
-            GPIO.setup(self.CLE, GPIO.OUT)
-            GPIO.setup(self.ALE, GPIO.OUT)
-            GPIO.setup(self.WE, GPIO.OUT)
+            GPIO.setup(self.RB, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # R/B# 핀은 풀업 저항 사용
+            GPIO.setup(self.RE, GPIO.OUT, initial=GPIO.HIGH)
+            GPIO.setup(self.CE, GPIO.OUT, initial=GPIO.HIGH)
+            GPIO.setup(self.CLE, GPIO.OUT, initial=GPIO.LOW)
+            GPIO.setup(self.ALE, GPIO.OUT, initial=GPIO.LOW)
+            GPIO.setup(self.WE, GPIO.OUT, initial=GPIO.HIGH)
             
             # 데이터 핀 입출력 설정
             for pin in self.IO_pins:
-                GPIO.setup(pin, GPIO.OUT)
+                GPIO.setup(pin, GPIO.OUT, initial=GPIO.HIGH)
                 
-            # 초기 상태 설정 및 파워온 시퀀스
+            # 초기 상태 설정
+            time.sleep(0.001)  # 1ms 대기
             self.reset_pins()
+            time.sleep(0.001)  # 1ms 대기
+            
+            # 파워온 시퀀스
             self.power_on_sequence()
+            
+            # Bad Block 스캔
+            self.scan_bad_blocks()
             
         except Exception as e:
             GPIO.cleanup()
@@ -63,7 +72,13 @@ class MT29F4G08ABADAWP:
             GPIO.output(self.WE, GPIO.HIGH)  # Write Disable
             GPIO.output(self.CLE, GPIO.LOW)  # Command Latch Disable
             GPIO.output(self.ALE, GPIO.LOW)  # Address Latch Disable
-            self.set_data_pins_output()      # 데이터 핀을 출력 모드로 설정
+            
+            # 데이터 핀을 출력 모드로 설정하고 HIGH로 설정
+            for pin in self.IO_pins:
+                GPIO.setup(pin, GPIO.OUT)
+                GPIO.output(pin, GPIO.HIGH)
+                
+            time.sleep(0.0001)  # 100us 대기
         except Exception as e:
             raise RuntimeError(f"핀 리셋 실패: {str(e)}")
             
@@ -108,7 +123,7 @@ class MT29F4G08ABADAWP:
     def power_on_sequence(self):
         """파워온 시퀀스 수행"""
         try:
-            # 1. VCC 안정화 대기 (최소 300us)
+            # 1. VCC 안정화 대기
             time.sleep(0.001)  # 1ms 대기
             
             # 2. 모든 컨트롤 신호를 HIGH로 설정
@@ -118,29 +133,57 @@ class MT29F4G08ABADAWP:
             GPIO.output(self.CLE, GPIO.LOW)
             GPIO.output(self.ALE, GPIO.LOW)
             
-            # 3. 추가 대기 (최소 100us)
+            # 3. 추가 대기
             time.sleep(0.0002)  # 200us
             
-            # 4. RESET 커맨드 전송
-            self.write_command(0xFF)
-            
-            # 5. Ready 대기
-            self.wait_ready()
+            # 4. RESET 커맨드 전송 (여러 번 시도)
+            for _ in range(3):  # 최대 3번 시도
+                try:
+                    self.write_command(0xFF)
+                    
+                    # R/B# 신호가 LOW로 변경되는지 확인
+                    timeout_start = time.time()
+                    while GPIO.input(self.RB) == GPIO.HIGH:
+                        if time.time() - timeout_start > 0.001:  # 1ms 타임아웃
+                            break
+                        time.sleep(0.0001)  # 100us 대기
+                    
+                    # Ready 대기
+                    self.wait_ready()
+                    return  # 성공하면 종료
+                except Exception as e:
+                    time.sleep(0.001)  # 1ms 대기 후 재시도
+                    continue
+                    
+            raise RuntimeError("RESET 커맨드 실패")
             
         except Exception as e:
             raise RuntimeError(f"파워온 시퀀스 실패: {str(e)}")
             
     def wait_ready(self):
         """R/B# 핀이 Ready(HIGH) 상태가 될 때까지 대기"""
-        # tWB 대기 (WE# high to R/B# low)
+        # tWB 대기
         time.sleep(self.tWB / 1_000_000_000)  # 100ns
         
         # R/B# 신호가 HIGH가 될 때까지 대기
-        timeout_start = time.time()
-        while GPIO.input(self.RB) == GPIO.LOW:
-            if time.time() - timeout_start > 0.01:  # 10ms 타임아웃
-                raise RuntimeError("R/B# 시그널 타임아웃")
-            time.sleep(0.0001)  # 100us 간격으로 체크
+        retry_count = 0
+        max_retries = 5
+        
+        while retry_count < max_retries:
+            timeout_start = time.time()
+            while GPIO.input(self.RB) == GPIO.LOW:
+                if time.time() - timeout_start > 0.01:  # 10ms 타임아웃
+                    break
+                time.sleep(0.0001)  # 100us 간격으로 체크
+                
+            if GPIO.input(self.RB) == GPIO.HIGH:
+                return  # Ready 상태 확인
+                
+            retry_count += 1
+            if retry_count < max_retries:
+                time.sleep(0.001)  # 1ms 대기 후 재시도
+                
+        raise RuntimeError("R/B# 시그널 타임아웃")
             
     def set_data_pins_output(self):
         """데이터 핀을 출력 모드로 설정"""
@@ -476,7 +519,6 @@ class MT29F4G08ABADAWP:
 
             # Confirm (0xD0)
             self.write_command(0xD0)
-
             # tWB 대기 (WE# high to R/B# low)
             time.sleep(self.tWB / 1_000_000_000)  # 100ns
 
