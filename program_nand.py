@@ -1,12 +1,14 @@
 import os
-import time
 import sys
 from datetime import datetime
 from nand_driver import MT29F4G08ABADAWP
 
 def hex_to_int(hex_str: str) -> int:
     """16진수 문자열을 정수로 변환"""
-    return int(hex_str, 16)
+    try:
+        return int(hex_str, 16)
+    except ValueError:
+        raise ValueError(f"잘못된 파일명 형식: {hex_str}")
 
 def erase_used_blocks(nand, used_blocks):
     """사용할 블록만 선택적으로 삭제"""
@@ -50,10 +52,6 @@ def program_nand():
     print(f"\n=== 프로그래밍 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
     print(f"총 {total_files}개 파일 프로그래밍 예정")
     
-    # 연속된 페이지 버퍼링을 위한 변수들
-    buffer = []
-    current_page = -1
-    
     try:
         for filename in files:
             address = hex_to_int(filename.split('.')[0])
@@ -62,38 +60,13 @@ def program_nand():
             with open(os.path.join(splits_dir, filename), 'rb') as f:
                 data = f.read()
             
-            if current_page == -1:
-                current_page = page_no
-                buffer = [data]
-            elif page_no == current_page + len(buffer):
-                buffer.append(data)
-                # 버퍼가 8페이지가 되면 프로그래밍 (메모리 관리)
-                if len(buffer) >= 8:
-                    for i, buf_data in enumerate(buffer):
-                        nand.write_page(current_page + i, buf_data)
-                    processed_files += len(buffer)
-                    sys.stdout.write(f"\r작업 중: {processed_files}/{total_files}")
-                    sys.stdout.flush()
-                    buffer = []
-                    current_page = -1
-            else:
-                # 연속되지 않은 페이지를 만나면 버퍼 프로그래밍
-                for i, buf_data in enumerate(buffer):
-                    nand.write_page(current_page + i, buf_data)
-                processed_files += len(buffer)
-                buffer = [data]
-                current_page = page_no
-                sys.stdout.write(f"\r작업 중: {processed_files}/{total_files}")
-                sys.stdout.flush()
-        
-        # 마지막 버퍼 처리
-        if buffer:
-            for i, buf_data in enumerate(buffer):
-                nand.write_page(current_page + i, buf_data)
-            processed_files += len(buffer)
-            sys.stdout.write(f"\r작업 중: {processed_files}/{total_files}")
+            # 페이지 프로그래밍
+            nand.write_page(page_no, data)
+            
+            processed_files += 1
+            sys.stdout.write(f"\r작업 중: {processed_files}/{total_files} - {filename}")
             sys.stdout.flush()
-        
+            
         end_datetime = datetime.now()
         print(f"\n\n프로그래밍 완료 (완료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')})")
         return True

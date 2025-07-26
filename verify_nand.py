@@ -60,57 +60,48 @@ def analyze_block_error(block_no, expected_block, actual_block):
 def verify_nand():
     nand = MT29F4G08ABADAWP()
     
-    # 메모리 사용량 최적화: 전체 파일을 한 번에 읽지 않고 블록 단위로 읽기
-    file_size = os.path.getsize('input.bin')
-    total_blocks = file_size // (2048 * 64)
+    # input.bin 파일 열기
+    with open('input.bin', 'rb') as f:
+        input_data = f.read()
     
-    # 버퍼 크기를 블록 크기의 배수로 설정 (예: 10개 블록)
-    BUFFER_BLOCKS = 10
-    BUFFER_SIZE = 2048 * 64 * BUFFER_BLOCKS
-    
-    errors = []
-    verified_blocks = 0
+    # 전체 크기 계산
+    total_size = len(input_data)
+    total_blocks = total_size // (2048 * 64)  # 블록 크기 = 페이지 크기(2KB) * 페이지 수(64)
     
     start_datetime = datetime.now()
     print(f"\n=== 검증 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
     print(f"총 {total_blocks}개 블록 검증 예정")
     
+    errors = []
+    verified_blocks = 0
+    
     try:
-        with open('input.bin', 'rb') as f:
-            while verified_blocks < total_blocks:
-                # 버퍼 크기만큼 읽기
-                blocks_to_read = min(BUFFER_BLOCKS, total_blocks - verified_blocks)
-                expected_data = f.read(2048 * 64 * blocks_to_read)
-                
-                # NAND에서 동일한 크기만큼 읽기
-                actual_data = bytearray()
-                start_page = verified_blocks * 64
-                
-                for block_offset in range(blocks_to_read):
-                    for page_offset in range(64):
-                        page_no = start_page + (block_offset * 64) + page_offset
-                        actual_data.extend(nand.read_page(page_no))
-                
-                # 블록 단위로 비교
-                for block_offset in range(blocks_to_read):
-                    block_start = block_offset * 2048 * 64
-                    block_end = block_start + (2048 * 64)
-                    
-                    expected_block = expected_data[block_start:block_end]
-                    actual_block = actual_data[block_start:block_end]
-                    
-                    if expected_block != actual_block:
-                        block_no = verified_blocks + block_offset
-                        error_info = analyze_block_error(
-                            block_no, 
-                            expected_block, 
-                            actual_block
-                        )
-                        errors.append(error_info)
-                
-                verified_blocks += blocks_to_read
-                sys.stdout.write(f"\r검증 중: {verified_blocks}/{total_blocks} 블록")
-                sys.stdout.flush()
+        for block_no in range(total_blocks):
+            # 블록의 첫 페이지 번호 계산
+            start_page = block_no * 64
+            
+            # input.bin에서 해당 블록의 데이터 추출
+            block_offset = block_no * 2048 * 64
+            expected_block = input_data[block_offset:block_offset + (2048 * 64)]
+            
+            # NAND에서 블록 데이터 읽기
+            actual_block = bytearray()
+            for page_offset in range(64):
+                page_no = start_page + page_offset
+                actual_block.extend(nand.read_page(page_no))
+            
+            # 블록 데이터 비교
+            if expected_block != actual_block:
+                error_info = analyze_block_error(
+                    block_no,
+                    expected_block,
+                    actual_block
+                )
+                errors.append(error_info)
+            
+            verified_blocks += 1
+            sys.stdout.write(f"\r검증 중: {verified_blocks}/{total_blocks} 블록")
+            sys.stdout.flush()
     
     except Exception as e:
         print(f"\n오류 발생 - 블록: {verified_blocks}")
