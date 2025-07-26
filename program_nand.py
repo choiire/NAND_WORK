@@ -10,6 +10,18 @@ def hex_to_int(hex_str: str) -> int:
     except ValueError:
         raise ValueError(f"잘못된 파일명 형식: {hex_str}")
 
+def validate_block_number(block_no: int) -> bool:
+    """블록 번호 유효성 검사"""
+    return 0 <= block_no < 4096  # 4Gb = 4096 blocks
+
+def calculate_block_number(address: int) -> int:
+    """주소를 블록 번호로 변환"""
+    # 블록 크기 = 페이지 크기(0x800 = 2KB) * 페이지 수(64)
+    block_no = address // (0x800 * 64)
+    if not validate_block_number(block_no):
+        raise ValueError(f"주소 0x{address:08X}에서 계산된 블록 번호({block_no})가 유효하지 않습니다")
+    return block_no
+
 def erase_used_blocks(nand, used_blocks):
     """사용할 블록만 선택적으로 삭제"""
     start_datetime = datetime.now()
@@ -17,6 +29,8 @@ def erase_used_blocks(nand, used_blocks):
     print(f"총 {len(used_blocks)}개 블록 삭제 예정")
     
     for i, block in enumerate(sorted(used_blocks)):
+        if not validate_block_number(block):
+            raise ValueError(f"유효하지 않은 블록 번호: {block}")
         nand.erase_block(block * 64)  # 블록의 첫 페이지 번호로 변환
         if (i + 1) % 10 == 0:  # 10블록마다 진행상황 출력
             sys.stdout.write(f"\r블록 삭제 중: {i + 1}/{len(used_blocks)} 블록")
@@ -39,7 +53,7 @@ def program_nand():
     used_blocks = set()
     for filename in files:
         address = hex_to_int(filename.split('.')[0])
-        block_no = (address // 0x800) // 64  # 페이지 번호를 블록 번호로 변환
+        block_no = calculate_block_number(address)
         used_blocks.add(block_no)
     
     # 필요한 블록만 삭제
