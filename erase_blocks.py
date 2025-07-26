@@ -4,12 +4,12 @@ from datetime import datetime
 from nand_driver import MT29F4G08ABADAWP
 
 def verify_block(nand, block_no: int, pages_to_check: list = None) -> dict:
-    """단일 블록 검증
+    """단일 블록 검증. 지정된 모든 페이지가 0xFF로 채워져 있는지 확인합니다.
     
     Args:
         nand: NAND 드라이버 인스턴스
         block_no: 검증할 블록 번호
-        pages_to_check: 검사할 페이지 번호 리스트 (None이면 첫 페이지만 검사)
+        pages_to_check: 검사할 페이지 오프셋 리스트 (0-63). None이면 블록 전체를 검사합니다.
     
     Returns:
         검증 결과 딕셔너리
@@ -17,65 +17,36 @@ def verify_block(nand, block_no: int, pages_to_check: list = None) -> dict:
     PAGES_PER_BLOCK = 64
     block_start_page = block_no * PAGES_PER_BLOCK
     MAX_RETRIES = 5  # 페이지 읽기 최대 재시도 횟수
-    TIMEOUT_SECONDS = 5  # 각 시도당 최대 대기 시간
     
-    # 공장 출하 시 Bad Block 마킹 확인
-    first_page = block_start_page
-    last_page = block_start_page + PAGES_PER_BLOCK - 1
-    
-    try:
-        first_byte = nand.read_page(first_page, 1)[0]
-        last_byte = nand.read_page(last_page, 1)[0]
-        
-        if first_byte != 0xFF or last_byte != 0xFF:
-            return {
-                'success': False,
-                'error': f"공장 출하 시 Bad Block 마킹 발견 (첫 페이지: 0x{first_byte:02X}, 마지막 페이지: 0x{last_byte:02X})"
-            }
-    except Exception as e:
-        return {
-            'success': False,
-            'error': f"Bad Block 마킹 확인 중 오류 발생: {str(e)}"
-        }
-    
+    # 기본적으로 블록 내 모든 페이지를 검사하도록 설정
     if pages_to_check is None:
-        pages_to_check = [block_start_page]  # 첫 페이지만 검사
+        pages_to_check = range(PAGES_PER_BLOCK)
     
     errors = []
     
     for page_offset in pages_to_check:
-        page_no = block_start_page + (page_offset % PAGES_PER_BLOCK)
+        page_no = block_start_page + page_offset
         
         # 페이지 읽기 재시도 로직
         read_success = False
+        data = None
         for retry in range(MAX_RETRIES):
-            timeout_start = time.time()
-            timeout_occurred = False
-            
-            while True:
-                try:
-                    data = nand.read_page(page_no)
-                    read_success = True
-                    break
-                except Exception as e:
-                    if time.time() - timeout_start > TIMEOUT_SECONDS:
-                        timeout_occurred = True
-                        break
-                    time.sleep(0.1)
-            
-            if read_success:
+            try:
+                data = nand.read_page(page_no)
+                read_success = True
                 break
-                
-            if timeout_occurred:
+            except Exception as e:
                 if retry == MAX_RETRIES - 1:
+                    # 최종 재시도 실패 시, 오류 반환
                     return {
                         'success': False,
-                        'error': f"페이지 {page_no} 읽기 실패 (최대 재시도 횟수 초과): 타임아웃"
+                        'error': f"페이지 {page_no} 읽기 실패 (최대 재시도 횟수 초과): {e}"
                     }
-                print(f"\n페이지 {page_no} 읽기 타임아웃, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
-                time.sleep(0.5)  # 다음 재시도 전 잠시 대기
+                print(f"\n페이지 {page_no} 읽기 오류, 재시도 중... ({retry + 1}/{MAX_RETRIES}): {e}")
+                time.sleep(0.5)
         
         if not read_success:
+            # 이 코드는 이론적으로 도달할 수 없지만, 안정성을 위해 남겨둡니다.
             continue
         
         # FF 값 검증
@@ -88,7 +59,7 @@ def verify_block(nand, block_no: int, pages_to_check: list = None) -> dict:
                         'offset': offset,
                         'value': value
                     })
-                    break  # 첫 번째 오류만 기록
+                    break  # 해당 페이지의 첫 번째 오류만 기록하고 다음 페이지로 넘어감
     
     return {
         'success': len(errors) == 0,
