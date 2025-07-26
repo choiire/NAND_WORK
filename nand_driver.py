@@ -97,7 +97,7 @@ class MT29F4G08ABADAWP:
     def wait_ready(self):
         """R/B# 핀이 Ready(HIGH) 상태가 될 때까지 대기"""
         while GPIO.input(self.RB) == GPIO.LOW:
-            time.sleep(0.00001)  # 10us 대기
+            pass  # 적극적 대기로 변경
             
     def set_data_pins_output(self):
         """데이터 핀을 출력 모드로 설정"""
@@ -115,8 +115,8 @@ class MT29F4G08ABADAWP:
         """8비트 데이터 쓰기"""
         for i in range(8):
             GPIO.output(self.IO_pins[i], (data >> i) & 1)
-        time.sleep(0.00001)  # 10us 대기
-            
+        # 대기 시간 제거
+
     def read_data(self):
         """8비트 데이터 읽기"""
         data = 0
@@ -127,21 +127,16 @@ class MT29F4G08ABADAWP:
         
     def write_command(self, cmd):
         """커맨드 쓰기"""
-        GPIO.output(self.CE, GPIO.LOW)   # Chip Enable
-        time.sleep(0.00001)  # 10us 대기
+        GPIO.output(self.CE, GPIO.LOW)
+        GPIO.output(self.CLE, GPIO.HIGH)
+        GPIO.output(self.ALE, GPIO.LOW)
         
-        GPIO.output(self.CLE, GPIO.HIGH) # Command Latch Enable
-        GPIO.output(self.ALE, GPIO.LOW)  # Address Latch Disable
-        time.sleep(0.00001)  # 10us 대기
-        
-        GPIO.output(self.WE, GPIO.LOW)   # Write Enable
+        GPIO.output(self.WE, GPIO.LOW)
         self.write_data(cmd)
-        GPIO.output(self.WE, GPIO.HIGH)  # Write Disable
-        time.sleep(0.00001)  # 10us 대기
+        GPIO.output(self.WE, GPIO.HIGH)
         
-        GPIO.output(self.CLE, GPIO.LOW)  # Command Latch Disable
-        time.sleep(0.00001)  # 10us 대기
-        
+        GPIO.output(self.CLE, GPIO.LOW)
+
     def write_address(self, addr):
         """주소 쓰기"""
         GPIO.output(self.CE, GPIO.LOW)   # Chip Enable
@@ -161,55 +156,49 @@ class MT29F4G08ABADAWP:
         
     def write_page(self, page_no: int, data: bytes):
         """한 페이지 쓰기"""
-        try:
-            self.validate_page(page_no)
-            self.validate_data_size(data)
+        if page_no < 0 or page_no >= 256 * 1024:  # 4Gb = 256K 페이지
+            raise ValueError("Invalid page number")
             
-            # 데이터 핀을 미리 출력으로 설정
-            self.set_data_pins_output()
+        # 데이터 핀을 미리 출력으로 설정
+        self.set_data_pins_output()
 
-            # Serial Data Input 커맨드
-            self.write_command(0x80)
+        # Serial Data Input 커맨드
+        self.write_command(0x80)
 
-            # Column & Row Address 한번에 처리
-            GPIO.output(self.CE, GPIO.LOW)
-            GPIO.output(self.CLE, GPIO.LOW)
-            GPIO.output(self.ALE, GPIO.HIGH)
-            
-            # Column Address (고정 0x0000)
+        # Column & Row Address 한번에 처리
+        GPIO.output(self.CE, GPIO.LOW)
+        GPIO.output(self.CLE, GPIO.LOW)
+        GPIO.output(self.ALE, GPIO.HIGH)
+        
+        # Column Address (고정 0x0000)
+        GPIO.output(self.WE, GPIO.LOW)
+        self.write_data(0x00)
+        GPIO.output(self.WE, GPIO.HIGH)
+        
+        GPIO.output(self.WE, GPIO.LOW)
+        self.write_data(0x00)
+        GPIO.output(self.WE, GPIO.HIGH)
+
+        # Row Address (3바이트)
+        for i in range(3):
             GPIO.output(self.WE, GPIO.LOW)
-            self.write_data(0x00)
+            self.write_data((page_no >> (8 * i)) & 0xFF)
             GPIO.output(self.WE, GPIO.HIGH)
             
+        GPIO.output(self.ALE, GPIO.LOW)
+
+        # 데이터 쓰기
+        for byte in data:
             GPIO.output(self.WE, GPIO.LOW)
-            self.write_data(0x00)
+            self.write_data(byte)
             GPIO.output(self.WE, GPIO.HIGH)
+            
+        # Program 커맨드
+        self.write_command(0x10)
+        
+        # Ready 대기
+        self.wait_ready()
 
-            # Row Address (3바이트)
-            for i in range(3):
-                GPIO.output(self.WE, GPIO.LOW)
-                self.write_data((page_no >> (8 * i)) & 0xFF)
-                GPIO.output(self.WE, GPIO.HIGH)
-                
-            GPIO.output(self.ALE, GPIO.LOW)
-
-            # 데이터 쓰기
-            for byte in data:
-                GPIO.output(self.WE, GPIO.LOW)
-                self.write_data(byte)
-                GPIO.output(self.WE, GPIO.HIGH)
-                
-            # Program 커맨드
-            self.write_command(0x10)
-            
-            # Ready 대기 및 상태 확인
-            self.wait_ready()
-            self.check_operation_status()
-            
-        except Exception as e:
-            self.reset_pins()
-            raise RuntimeError(f"페이지 쓰기 실패 (페이지 {page_no}): {str(e)}")
-            
     def read_page(self, page_no: int, length: int = 2048):
         """한 페이지 읽기"""
         try:
