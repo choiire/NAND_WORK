@@ -132,15 +132,15 @@ class MT29F4G08ABADAWP:
             
     def wait_ready(self):
         """R/B# 핀이 Ready(HIGH) 상태가 될 때까지 대기"""
-        # tWB 대기
-        time.sleep(self.tWB / 1_000_000_000)
+        # tWB 대기 (WE# high to R/B# low)
+        time.sleep(self.tWB / 1_000_000_000)  # 100ns
         
         # R/B# 신호가 HIGH가 될 때까지 대기
-        timeout = time.time() + 1.0  # 1초 타임아웃
+        timeout_start = time.time()
         while GPIO.input(self.RB) == GPIO.LOW:
-            if time.time() > timeout:
+            if time.time() - timeout_start > 0.01:  # 10ms 타임아웃
                 raise RuntimeError("R/B# 시그널 타임아웃")
-            time.sleep(0.001)  # 1ms 대기
+            time.sleep(0.0001)  # 100us 간격으로 체크
             
     def set_data_pins_output(self):
         """데이터 핀을 출력 모드로 설정"""
@@ -444,17 +444,17 @@ class MT29F4G08ABADAWP:
             self.set_data_pins_output()
             
     def erase_block(self, page_no: int):
-        """블록 단위 erase"""
+        """블록 단위 erase
+        
+        타이밍:
+        - tWB (WE# high to R/B# low): 100ns
+        - tBERS (Block Erase Time): ~3.5ms
+        - tRST (Device Reset Time): 5us ~ 500us
+        """
         try:
             self.validate_page(page_no)
             block_no = page_no // self.PAGES_PER_BLOCK
             self.validate_block(block_no)
-            
-            # 작업 전 NAND 상태 초기화
-            self.reset_pins()
-            self.write_command(0xFF)  # NAND 리셋 커맨드
-            self.wait_ready()
-            time.sleep(0.001)  # 1ms 대기
             
             # Block Erase 커맨드 (0x60)
             self.write_command(0x60)
@@ -471,31 +471,31 @@ class MT29F4G08ABADAWP:
                 
             GPIO.output(self.ALE, GPIO.LOW)
 
+            # tADL (ALE to data loading time) 대기
+            time.sleep(0.0001)  # 100us
+
             # Confirm (0xD0)
             self.write_command(0xD0)
 
-            # Ready 대기 및 상태 확인
-            self.wait_ready()
+            # tWB 대기 (WE# high to R/B# low)
+            time.sleep(self.tWB / 1_000_000_000)  # 100ns
+
+            # Ready 대기 (tBERS)
+            timeout_start = time.time()
+            while GPIO.input(self.RB) == GPIO.LOW:
+                if time.time() - timeout_start > 0.01:  # 10ms (최대 tBERS)
+                    # 타임아웃 시 리셋 후 재시도
+                    self.write_command(0xFF)  # Reset command
+                    time.sleep(0.000005)  # 5us (최소 tRST)
+                    raise RuntimeError("블록 삭제 타임아웃")
+                time.sleep(0.0001)  # 100us 간격으로 체크
             
-            # 상태 확인 전 추가 대기
-            time.sleep(0.001)  # 1ms 대기
-            
-            if not self.check_operation_status():
-                raise RuntimeError("블록 삭제 상태 확인 실패")
-            
-            # 작업 완료 후 추가 대기
-            time.sleep(0.002)  # 2ms 대기
-            
+            # 상태 확인
+            status = self.check_operation_status()
+            if not status:
+                raise RuntimeError("블록 삭제 실패")
+                
         except Exception as e:
-            # 오류 발생 시 복구 시도
-            try:
-                self.reset_pins()
-                self.write_command(0xFF)  # NAND 리셋 커맨드
-                self.wait_ready()
-                time.sleep(0.005)  # 5ms 대기
-            except:
-                pass  # 복구 시도 중 오류는 무시
-            
             raise RuntimeError(f"블록 삭제 실패 (블록 {page_no // self.PAGES_PER_BLOCK}): {str(e)}")
         
         finally:
