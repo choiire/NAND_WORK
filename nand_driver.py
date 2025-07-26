@@ -483,7 +483,7 @@ class MT29F4G08ABADAWP:
             self.set_data_pins_output()
             
     def erase_block(self, page_no: int):
-        """블록 단위 erase
+        """블록 단위 erase (강제 삭제)
         
         타이밍:
         - tWB (WE# high to R/B# low): 100ns
@@ -491,9 +491,8 @@ class MT29F4G08ABADAWP:
         - tRST (Device Reset Time): 5us ~ 500us
         """
         try:
-            self.validate_page(page_no)
+            # 블록 번호 계산 (유효성 검사 없이)
             block_no = page_no // self.PAGES_PER_BLOCK
-            self.validate_block(block_no)
             
             # Block Erase 커맨드 (0x60)
             self.write_command(0x60)
@@ -515,6 +514,7 @@ class MT29F4G08ABADAWP:
 
             # Confirm (0xD0)
             self.write_command(0xD0)
+            
             # tWB 대기 (WE# high to R/B# low)
             time.sleep(self.tWB / 1_000_000_000)  # 100ns
 
