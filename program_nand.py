@@ -209,7 +209,8 @@ def program_nand():
         total_files = len(files)
         processed_files = 0
         failed_files = []
-        MAX_RETRIES = 3
+        MAX_RETRIES = 5
+        TIMEOUT_SECONDS = 5
         
         start_datetime = datetime.now()
         print(f"\n=== 프로그래밍 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
@@ -234,22 +235,65 @@ def program_nand():
                 
                 # 데이터 읽기
                 with open(filepath, 'rb') as f:
-                    data = f.read()
+                    write_data = f.read()
                 
-                # 최대 3번 재시도
+                # 최대 5번 재시도
                 success = False
                 for retry in range(MAX_RETRIES):
                     try:
-                        nand.write_page(page_no, data)
-                        success = True
+                        timeout_start = time.time()
+                        while True:
+                            try:
+                                # 1. 페이지 쓰기
+                                nand.write_page(page_no, write_data)
+                                
+                                # 2. 즉시 검증
+                                read_data = nand.read_page(page_no)
+                                
+                                # 3. 데이터 비교
+                                if read_data != write_data:
+                                    # 불일치하는 바이트 위치와 값 찾기
+                                    mismatch_positions = []
+                                    for i, (w, r) in enumerate(zip(write_data, read_data)):
+                                        if w != r:
+                                            mismatch_positions.append({
+                                                'offset': i,
+                                                'written': w,
+                                                'read': r
+                                            })
+                                            if len(mismatch_positions) >= 5:  # 최대 5개까지만 기록
+                                                break
+                                    
+                                    raise ValueError(
+                                        f"데이터 검증 실패:\n" + 
+                                        "\n".join([
+                                            f"  오프셋 0x{m['offset']:04X}: "
+                                            f"쓰기 0x{m['written']:02X} != "
+                                            f"읽기 0x{m['read']:02X}"
+                                            for m in mismatch_positions
+                                        ])
+                                    )
+                                
+                                success = True
+                                break
+                                
+                            except Exception as e:
+                                if time.time() - timeout_start > TIMEOUT_SECONDS:
+                                    raise TimeoutError("페이지 프로그래밍/검증 타임아웃")
+                                time.sleep(0.1)
                         break
+                        
                     except Exception as e:
                         if retry == MAX_RETRIES - 1:
-                            print(f"\n파일 '{filename}' 프로그래밍 실패 (최대 재시도 횟수 초과): {str(e)}")
-                            failed_files.append(filename)
+                            print(f"\n파일 '{filename}' 프로그래밍/검증 실패 (최대 재시도 횟수 초과): {str(e)}")
+                            failed_files.append({
+                                'file': filename,
+                                'error': str(e)
+                            })
                             nand.mark_bad_block(block_no)
                         else:
-                            print(f"\n파일 '{filename}' 프로그래밍 실패, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
+                            print(f"\n파일 '{filename}' 프로그래밍/검증 실패, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
+                            time.sleep(0.1)
                 
                 if success:
                     processed_files += 1
@@ -258,17 +302,45 @@ def program_nand():
                 
             except Exception as e:
                 print(f"\n파일 '{filename}' 프로그래밍 중 오류 발생: {str(e)}")
-                failed_files.append(filename)
+                failed_files.append({
+                    'file': filename,
+                    'error': str(e)
+                })
         
         end_datetime = datetime.now()
         duration = end_datetime - start_datetime
-        print(f"\n\n프로그래밍 완료 (소요 시간: {duration})")
+        print(f"\n\n=== 프로그래밍 완료 (소요 시간: {duration}) ===")
         
-        if failed_files:
-            print(f"\n프로그래밍 실패한 파일들: {failed_files}")
+        if not failed_files:
+            print("결과: 모든 파일이 성공적으로 프로그래밍됨")
+            return True
+        else:
+            print(f"결과: {len(failed_files)}개 파일에서 문제 발생")
+            
+            # 오류 로그 파일 저장
+            log_filename = f"program_errors_{start_datetime.strftime('%Y%m%d_%H%M%S')}.txt"
+            with open(log_filename, 'w', encoding='utf-8') as f:
+                f.write(f"=== NAND 프로그래밍 오류 로그 ===\n")
+                f.write(f"시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"종료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"소요 시간: {duration}\n")
+                f.write(f"총 오류 파일 수: {len(failed_files)}\n\n")
+                
+                for error in failed_files:
+                    f.write(f"\n파일: {error['file']}\n")
+                    f.write(f"  {error['error']}\n")
+            
+            print(f"\n오류 상세 내역이 {log_filename} 파일에 저장되었습니다.")
+            
+            # 처음 5개의 오류만 화면에 출력
+            for error in failed_files[:5]:
+                print(f"\n파일: {error['file']}")
+                print(f"  {error['error']}")
+            
+            if len(failed_files) > 5:
+                print(f"\n... 외 {len(failed_files)-5}개 파일에서 문제 발생")
             return False
-        return True
-        
+            
     except Exception as e:
         print(f"\n치명적 오류 발생: {str(e)}")
         return False
