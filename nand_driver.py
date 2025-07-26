@@ -2,7 +2,7 @@
 import RPi.GPIO as GPIO
 import time
 
-class MT2F4G08ABADAWP:
+class MT29F4G08ABADAWP:
     """
     Micron MT29F4G08ABADAWP NAND Flash 드라이버 (Raspberry Pi 5 용)
     - 비동기식 인터페이스 제어
