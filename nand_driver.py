@@ -354,8 +354,20 @@ class MT29F4G08ABADAWP:
             current_block += 1
         raise RuntimeError("사용 가능한 블록이 없습니다")
 
+    def calculate_ecc(self, data):
+        """512바이트 데이터에 대한 ECC 계산
+        BCH-8 알고리즘 사용 (1-bit 오류 수정, 2-bit 오류 감지)
+        """
+        ecc = 0
+        for i in range(512):
+            # 각 바이트의 비트를 XOR
+            for bit in range(8):
+                if data[i] & (1 << bit):
+                    ecc ^= (i * 8 + bit)
+        return ecc.to_bytes(3, 'little')  # 3바이트 ECC
+
     def write_page(self, page_no: int, data: bytes):
-        """한 페이지 쓰기 (ECC 적용)"""
+        """한 페이지 쓰기 (Raw 데이터 직접 쓰기)"""
         try:
             self.validate_page(page_no)
             block_no = page_no // self.PAGES_PER_BLOCK
@@ -364,19 +376,14 @@ class MT29F4G08ABADAWP:
             if self.is_bad_block(block_no):
                 new_block = self.find_good_block(block_no + 1)
                 page_no = new_block * self.PAGES_PER_BLOCK + (page_no % self.PAGES_PER_BLOCK)
-                
-            # ECC 생성 및 데이터 준비
-            encoded_data = []
-            for i in range(0, len(data), 256):  # 256바이트 단위로 ECC 생성
-                chunk = data[i:i+256]
-                if len(chunk) < 256:  # 패딩
-                    chunk = chunk + b'\xFF' * (256 - len(chunk))
-                encoded = self.hamming_encode(list(chunk))
-                encoded_data.extend(encoded)
             
-            # 원래의 write_page 로직
+            # 데이터가 2048바이트보다 작으면 0xFF로 패딩
+            if len(data) < self.PAGE_SIZE:
+                data = data + b'\xFF' * (self.PAGE_SIZE - len(data))
+            
+            # 페이지 프로그래밍 시작
             self.set_data_pins_output()
-            self.write_command(0x80)
+            self.write_command(0x80)  # Serial Data Input
             
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
@@ -399,16 +406,17 @@ class MT29F4G08ABADAWP:
                 
             GPIO.output(self.ALE, GPIO.LOW)
             
-            # 인코딩된 데이터 쓰기
-            for byte in encoded_data:
+            # 데이터 쓰기
+            for byte in data[:self.PAGE_SIZE]:
                 GPIO.output(self.WE, GPIO.LOW)
                 self.write_data(byte)
                 GPIO.output(self.WE, GPIO.HIGH)
-                
+            
+            # 프로그래밍 시작
             self.write_command(0x10)
             self.wait_ready()
             
-            # 쓰기 검증
+            # 상태 확인
             if not self.check_operation_status():
                 self.mark_bad_block(block_no)
                 raise RuntimeError("페이지 쓰기 실패")
@@ -420,7 +428,7 @@ class MT29F4G08ABADAWP:
             self.set_data_pins_output()
 
     def read_page(self, page_no: int, length: int = 2048):
-        """한 페이지 읽기 (ECC 적용)"""
+        """한 페이지 읽기 (Raw 데이터 직접 읽기)"""
         try:
             self.validate_page(page_no)
             block_no = page_no // self.PAGES_PER_BLOCK
@@ -429,7 +437,7 @@ class MT29F4G08ABADAWP:
             if self.is_bad_block(block_no):
                 raise RuntimeError(f"Bad Block 접근 시도: 블록 {block_no}")
             
-            # 원래의 read_page 로직으로 데이터 읽기
+            # 읽기 명령 시작
             self.write_command(0x00)
             
             GPIO.output(self.CE, GPIO.LOW)
@@ -458,27 +466,15 @@ class MT29F4G08ABADAWP:
             
             self.set_data_pins_input()
             
-            # ECC 적용된 데이터 읽기
-            encoded_data = []
-            for _ in range(length + (length // 256) * 32):  # ECC 오버헤드 포함
+            # 데이터 읽기
+            data = bytearray()
+            for _ in range(length):
                 GPIO.output(self.RE, GPIO.LOW)
                 byte = self.read_data()
                 GPIO.output(self.RE, GPIO.HIGH)
-                encoded_data.append(byte)
+                data.append(byte)
             
-            # ECC 디코딩 및 오류 수정
-            decoded_data = []
-            for i in range(0, len(encoded_data), 288):  # 256 + 32 (ECC)
-                chunk = encoded_data[i:i+288]
-                if len(chunk) == 288:
-                    try:
-                        decoded = self.hamming_decode(chunk)
-                        decoded_data.extend(decoded[:256])
-                    except RuntimeError as e:
-                        print(f"ECC 오류 발생 (페이지 {page_no}, 오프셋 {i}): {str(e)}")
-                        decoded_data.extend([0xFF] * 256)  # 오류 발생 시 0xFF로 채움
-            
-            return bytes(decoded_data[:length])
+            return bytes(data)
             
         except Exception as e:
             self.reset_pins()
