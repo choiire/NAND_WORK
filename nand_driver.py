@@ -495,8 +495,30 @@ class MT29F4G08ABADAWP:
                 
             GPIO.output(self.ALE, GPIO.LOW)
             
+            # 읽기 명령 실행
             self.write_command(0x30)
-            self.wait_ready()
+            
+            # tWB 대기
+            time.sleep(self.tWB / 1_000_000_000)  # 100ns
+            
+            # R/B# LOW 확인
+            timeout_start = time.time()
+            while GPIO.input(self.RB) == GPIO.HIGH:
+                if time.time() - timeout_start > 0.001:  # 1ms 타임아웃
+                    break
+                time.sleep(0.000100)  # 100ns 간격으로 체크
+            
+            # Ready 대기
+            timeout_start = time.time()
+            while GPIO.input(self.RB) == GPIO.LOW:
+                if time.time() - timeout_start > 0.01:  # 10ms 타임아웃
+                    self.write_command(0xFF)  # Reset
+                    time.sleep(0.000005)  # 5us
+                    raise RuntimeError("읽기 타임아웃")
+                time.sleep(0.0001)  # 100us 간격으로 체크
+            
+            # tR 대기 (Data Transfer from Cell to Register)
+            time.sleep(self.tR / 1_000_000_000)  # 25us
             
             self.set_data_pins_input()
             
@@ -504,8 +526,10 @@ class MT29F4G08ABADAWP:
             data = bytearray()
             for _ in range(length):
                 GPIO.output(self.RE, GPIO.LOW)
+                time.sleep(0.000020)  # tRR: 20ns
                 byte = self.read_data()
                 GPIO.output(self.RE, GPIO.HIGH)
+                time.sleep(0.000020)  # tRR: 20ns
                 data.append(byte)
             
             return bytes(data)
