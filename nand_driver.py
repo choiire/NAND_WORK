@@ -450,9 +450,15 @@ class MT29F4G08ABADAWP:
             block_no = page_no // self.PAGES_PER_BLOCK
             self.validate_block(block_no)
             
+            # 작업 전 NAND 상태 초기화
+            self.reset_pins()
+            self.write_command(0xFF)  # NAND 리셋 커맨드
+            self.wait_ready()
+            time.sleep(0.001)  # 1ms 대기
+            
             # Block Erase 커맨드 (0x60)
             self.write_command(0x60)
-    
+
             # Row Address (3바이트)
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
@@ -464,14 +470,38 @@ class MT29F4G08ABADAWP:
                 GPIO.output(self.WE, GPIO.HIGH)
                 
             GPIO.output(self.ALE, GPIO.LOW)
-    
+
             # Confirm (0xD0)
             self.write_command(0xD0)
-    
+
             # Ready 대기 및 상태 확인
             self.wait_ready()
-            self.check_operation_status()
+            
+            # 상태 확인 전 추가 대기
+            time.sleep(0.001)  # 1ms 대기
+            
+            if not self.check_operation_status():
+                raise RuntimeError("블록 삭제 상태 확인 실패")
+            
+            # 작업 완료 후 추가 대기
+            time.sleep(0.002)  # 2ms 대기
             
         except Exception as e:
-            self.reset_pins()
-            raise RuntimeError(f"블록 삭제 실패 (블록 {page_no // self.PAGES_PER_BLOCK}): {str(e)}") 
+            # 오류 발생 시 복구 시도
+            try:
+                self.reset_pins()
+                self.write_command(0xFF)  # NAND 리셋 커맨드
+                self.wait_ready()
+                time.sleep(0.005)  # 5ms 대기
+            except:
+                pass  # 복구 시도 중 오류는 무시
+            
+            raise RuntimeError(f"블록 삭제 실패 (블록 {page_no // self.PAGES_PER_BLOCK}): {str(e)}")
+        
+        finally:
+            # 항상 안전한 상태로 복원
+            try:
+                self.reset_pins()
+                time.sleep(0.001)  # 1ms 대기
+            except:
+                pass 
