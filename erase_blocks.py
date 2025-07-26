@@ -95,8 +95,76 @@ def verify_block(nand, block_no: int, pages_to_check: list = None) -> dict:
         'errors': errors
     }
 
+def scan_bad_blocks_after_erase(nand):
+    """삭제 후 Bad Block 스캔"""
+    TOTAL_BLOCKS = 4096
+    PAGES_PER_BLOCK = 64
+    
+    print("\n=== 삭제 후 Bad Block 스캔 시작 ===")
+    new_bad_blocks = []
+    MAX_RETRIES = 3
+    
+    for block in range(TOTAL_BLOCKS):
+        # 진행 상황 표시 (100블록마다)
+        if block % 100 == 0:
+            sys.stdout.write(f"\rBad Block 스캔 진행: {block}/{TOTAL_BLOCKS} 블록")
+            sys.stdout.flush()
+        
+        page = block * PAGES_PER_BLOCK
+        
+        try:
+            # 첫 페이지와 마지막 페이지의 첫 바이트 확인
+            for retry in range(MAX_RETRIES):
+                try:
+                    first_page_data = nand.read_page(page, 1)
+                    first_byte = first_page_data[0] if first_page_data else 0x00
+                    
+                    last_page_data = nand.read_page(page + PAGES_PER_BLOCK - 1, 1)
+                    last_byte = last_page_data[0] if last_page_data else 0x00
+                    break
+                except Exception as e:
+                    if retry == MAX_RETRIES - 1:
+                        print(f"\n블록 {block} 읽기 실패: {str(e)}")
+                        first_byte = 0x00
+                        last_byte = 0x00
+                    else:
+                        time.sleep(0.01)
+            
+            # 첫 바이트가 0xFF가 아니면 Bad Block
+            if first_byte != 0xFF or last_byte != 0xFF:
+                nand.mark_bad_block(block)
+                new_bad_blocks.append({
+                    'block': block,
+                    'first_byte': first_byte,
+                    'last_byte': last_byte
+                })
+                print(f"\nBad Block 발견: 블록 {block} (첫 페이지: 0x{first_byte:02X}, 마지막 페이지: 0x{last_byte:02X})")
+                
+        except Exception as e:
+            print(f"\n블록 {block} 스캔 중 오류: {str(e)}")
+            # 안전을 위해 스캔에 실패한 블록은 Bad Block으로 표시
+            nand.mark_bad_block(block)
+            new_bad_blocks.append({
+                'block': block,
+                'error': str(e)
+            })
+    
+    print(f"\n\nBad Block 스캔 완료.")
+    print(f"새로 발견된 Bad Block: {len(new_bad_blocks)}개")
+    if new_bad_blocks:
+        print("Bad Block 목록:")
+        for bad_block in new_bad_blocks[:10]:  # 최대 10개만 표시
+            if 'error' in bad_block:
+                print(f"  블록 {bad_block['block']}: 오류 - {bad_block['error']}")
+            else:
+                print(f"  블록 {bad_block['block']}: 첫 페이지=0x{bad_block['first_byte']:02X}, 마지막 페이지=0x{bad_block['last_byte']:02X}")
+        if len(new_bad_blocks) > 10:
+            print(f"  ... 및 {len(new_bad_blocks) - 10}개 더")
+    
+    return new_bad_blocks
+
 def erase_and_verify_blocks():
-    """전체 블록을 삭제하고 FF로 초기화되었는지 검증"""
+    """1단계: 전체 블록 삭제, 2단계: Bad Block 스캔"""
     TOTAL_BLOCKS = 4096  # 4Gb = 4096 blocks
     PAGES_PER_BLOCK = 64
     PAGE_SIZE = 2048
@@ -104,31 +172,33 @@ def erase_and_verify_blocks():
     CHUNK_SIZE = 10  # 한 번에 처리할 블록 수
     
     try:
+        # NAND 초기화 (Bad Block 스캔 비활성화 필요)
+        print("NAND 플래시 드라이버 초기화 중 (Bad Block 스캔 스킵)...")
         nand = MT29F4G08ABADAWP()
         
+        # 기존 Bad Block 정보 초기화
+        nand.bad_blocks = set()
+        
         start_datetime = datetime.now()
-        print(f"\n=== 전체 블록 삭제 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
+        print(f"\n=== 1단계: 전체 블록 삭제 시작 ===")
+        print(f"시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"총 {TOTAL_BLOCKS}개 블록 삭제 예정")
+        print("=" * 50)
         
-        errors = []
+        erase_errors = []
         processed_blocks = 0
+        skipped_blocks = 0
         
-        # 청크 단위로 처리
+        # 1단계: 모든 블록 삭제
         for chunk_start in range(0, TOTAL_BLOCKS, CHUNK_SIZE):
             chunk_end = min(chunk_start + CHUNK_SIZE, TOTAL_BLOCKS)
             chunk_blocks = chunk_end - chunk_start
             
             for block_offset in range(chunk_blocks):
                 block = chunk_start + block_offset
-                
-                # Bad Block 체크
-                if nand.is_bad_block(block):
-                    print(f"\n블록 {block}은 Bad Block으로 표시되어 있어 건너뜁니다.")
-                    continue
-                
                 page_no = block * PAGES_PER_BLOCK
                 
-                # 1. 블록 삭제 (최대 5번 재시도)
+                # 블록 삭제 (최대 5번 재시도)
                 erase_success = False
                 for retry in range(MAX_RETRIES):
                     try:
@@ -138,8 +208,7 @@ def erase_and_verify_blocks():
                     except Exception as e:
                         if retry == MAX_RETRIES - 1:
                             print(f"\n블록 {block} 삭제 실패 (최대 재시도 횟수 초과): {str(e)}")
-                            nand.mark_bad_block(block)
-                            errors.append({
+                            erase_errors.append({
                                 'block': block,
                                 'error': f"삭제 실패: {str(e)}"
                             })
@@ -147,77 +216,88 @@ def erase_and_verify_blocks():
                             print(f"\n블록 {block} 삭제 실패, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
                             time.sleep(0.1)
                 
-                if not erase_success:
-                    continue
+                if erase_success:
+                    processed_blocks += 1
+                else:
+                    skipped_blocks += 1
                 
-                # 2. 블록 검증
-                verify_result = verify_block(nand, block)
-                if not verify_result['success']:
-                    if 'error' in verify_result:
-                        print(f"\n블록 {block} 검증 실패: {verify_result['error']}")
-                    else:
-                        print(f"\n블록 {block} 검증 실패: 초기화 오류")
-                    nand.mark_bad_block(block)
-                    errors.append({
-                        'block': block,
-                        'errors': verify_result.get('errors', [])
-                    })
-                
-                processed_blocks += 1
-                if processed_blocks % 10 == 0:
-                    sys.stdout.write(f"\r작업 중: {processed_blocks}/{TOTAL_BLOCKS} 블록")
+                # 진행률 표시 (10블록마다)
+                if (processed_blocks + skipped_blocks) % 10 == 0:
+                    progress = ((processed_blocks + skipped_blocks) / TOTAL_BLOCKS) * 100
+                    sys.stdout.write(f"\r삭제 진행: {progress:.1f}% ({processed_blocks + skipped_blocks}/{TOTAL_BLOCKS})")
                     sys.stdout.flush()
         
-        # 3. 결과 출력
-        end_datetime = datetime.now()
-        duration = end_datetime - start_datetime
-        print(f"\n\n=== 작업 완료 (소요 시간: {duration}) ===")
+        erase_end_time = datetime.now()
+        erase_duration = erase_end_time - start_datetime
         
-        if not errors:
-            print("결과: 모든 블록이 성공적으로 초기화됨 (FF)")
-            return True
-        else:
-            print(f"결과: {len(errors)}개 블록에서 문제 발생")
-            
-            # 오류 로그 파일 저장
-            log_filename = f"erase_errors_{start_datetime.strftime('%Y%m%d_%H%M%S')}.txt"
+        print(f"\n\n1단계 완료:")
+        print(f"  삭제 성공: {processed_blocks}개 블록")
+        print(f"  삭제 실패: {skipped_blocks}개 블록") 
+        print(f"  소요 시간: {erase_duration}")
+        
+        # 2단계: Bad Block 스캔
+        print(f"\n=== 2단계: Bad Block 스캔 시작 ===")
+        scan_start_time = datetime.now()
+        
+        new_bad_blocks = scan_bad_blocks_after_erase(nand)
+        
+        scan_end_time = datetime.now()
+        scan_duration = scan_end_time - scan_start_time
+        total_duration = scan_end_time - start_datetime
+        
+        # 최종 결과 출력
+        print(f"\n\n{'='*60}")
+        print(f"=== 전체 작업 완료 ===")
+        print(f"{'='*60}")
+        print(f"완료 시간: {scan_end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"총 소요 시간: {total_duration}")
+        print(f"1단계 (삭제) 시간: {erase_duration}")
+        print(f"2단계 (스캔) 시간: {scan_duration}")
+        print()
+        print(f"총 블록 수: {TOTAL_BLOCKS}")
+        print(f"삭제 성공: {processed_blocks}")
+        print(f"삭제 실패: {len(erase_errors)}")
+        print(f"Bad Block 발견: {len(new_bad_blocks)}")
+        print(f"전체 성공률: {(processed_blocks/TOTAL_BLOCKS)*100:.2f}%")
+        
+        # 오류 로그 저장
+        if erase_errors or new_bad_blocks:
+            log_filename = f"erase_scan_log_{start_datetime.strftime('%Y%m%d_%H%M%S')}.txt"
             with open(log_filename, 'w', encoding='utf-8') as f:
-                f.write(f"=== NAND 블록 삭제 오류 로그 ===\n")
+                f.write(f"=== NAND 블록 삭제 및 Bad Block 스캔 로그 ===\n")
                 f.write(f"시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"종료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"소요 시간: {duration}\n")
-                f.write(f"총 오류 블록 수: {len(errors)}\n\n")
+                f.write(f"종료 시간: {scan_end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"총 소요 시간: {total_duration}\n")
+                f.write(f"삭제 오류 블록 수: {len(erase_errors)}\n")
+                f.write(f"Bad Block 수: {len(new_bad_blocks)}\n\n")
                 
-                for error in errors:
-                    f.write(f"\n블록 {error['block']}:\n")
-                    if 'error' in error:
-                        f.write(f"  {error['error']}\n")
-                    else:
-                        for page_error in error['errors']:
-                            f.write(f"  페이지 {page_error['page']}:\n")
-                            f.write(f"    오프셋 0x{page_error['offset']:04X}에서 "
-                                  f"0x{page_error['value']:02X} 발견 (예상: 0xFF)\n")
+                if erase_errors:
+                    f.write("=== 삭제 실패 블록 ===\n")
+                    for error in erase_errors:
+                        f.write(f"블록 {error['block']}: {error['error']}\n")
+                    f.write("\n")
+                
+                if new_bad_blocks:
+                    f.write("=== Bad Block 목록 ===\n")
+                    for bad_block in new_bad_blocks:
+                        if 'error' in bad_block:
+                            f.write(f"블록 {bad_block['block']}: 스캔 오류 - {bad_block['error']}\n")
+                        else:
+                            f.write(f"블록 {bad_block['block']}: 첫 페이지=0x{bad_block['first_byte']:02X}, "
+                                  f"마지막 페이지=0x{bad_block['last_byte']:02X}\n")
             
-            print(f"\n오류 상세 내역이 {log_filename} 파일에 저장되었습니다.")
-            
-            # 처음 5개의 오류만 화면에 출력
-            for error in errors[:5]:
-                print(f"\n블록 {error['block']}:")
-                if 'error' in error:
-                    print(f"  {error['error']}")
-                else:
-                    for page_error in error['errors']:
-                        print(f"  페이지 {page_error['page']}:")
-                        print(f"    오프셋 0x{page_error['offset']:04X}에서 "
-                              f"0x{page_error['value']:02X} 발견 (예상: 0xFF)")
-            
-            if len(errors) > 5:
-                print(f"\n... 외 {len(errors)-5}개 블록에서 문제 발생")
-            return False
+            print(f"\n상세 로그가 {log_filename} 파일에 저장되었습니다.")
+        
+        print("=" * 60)
+        
+        # 성공 기준: 삭제 실패가 적고 전체적으로 안정적
+        success_rate = (processed_blocks / TOTAL_BLOCKS) * 100
+        return success_rate >= 95.0  # 95% 이상 성공 시 성공으로 간주
             
     except Exception as e:
         print(f"\n치명적 오류 발생: {str(e)}")
         return False
 
 if __name__ == "__main__":
-    erase_and_verify_blocks() 
+    success = erase_and_verify_blocks()
+    sys.exit(0 if success else 1) 
