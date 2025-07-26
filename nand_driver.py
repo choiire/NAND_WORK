@@ -161,6 +161,14 @@ class MT2F4G08ABADAWP:
         GPIO.output(self.CE, GPIO.HIGH)
         return status
 
+    def mark_bad_block(self, block_no: int):
+        """지정한 블록을 Bad Block 리스트에 추가합니다."""
+        if block_no not in self.bad_blocks:
+            self.bad_blocks.add(block_no)
+            # 실제 NAND에 마킹하는 로직이 필요하다면 여기에 추가할 수 있습니다.
+            # 예: 첫 페이지의 특정 위치에 0x00 같은 마커를 쓰는 작업
+            print(f"블록 {block_no}이(가) 수동으로 Bad Block으로 마킹되었습니다.")
+
     def is_bad_block(self, block_no: int) -> bool:
         return block_no in self.bad_blocks
 

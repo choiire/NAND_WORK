@@ -139,10 +139,9 @@ def erase_and_verify_blocks():
                         except Exception as e:
                             if retry == MAX_RETRIES - 1:
                                 print(f"\n2-Plane 블록 삭제 실패 ({block_even}, {block_odd}): {str(e)}")
-                                nand.bad_blocks.add(block_even)
-                                nand.bad_blocks.add(block_odd)
-                                errors.append({'block': block_even, 'error': f"2-Plane 삭제 실패: {str(e)}"})
-                                errors.append({'block': block_odd, 'error': f"2-Plane 삭제 실패: {str(e)}"})
+                                # 드라이버가 이미 Bad Block으로 마킹하므로 여기서는 오류만 기록
+                                errors.append({'block': block_even, 'error': f"2-Plane Erase 실패: {str(e)}"})
+                                errors.append({'block': block_odd, 'error': f"2-Plane Erase 실패: {str(e)}"})
                             else:
                                 print(f"\n2-Plane 블록 삭제 실패 ({block_even}, {block_odd}), 재시도 중... ({retry + 1}/{MAX_RETRIES})")
                                 time.sleep(0.1)
@@ -171,7 +170,7 @@ def erase_and_verify_blocks():
                     except Exception as e:
                         if retry == MAX_RETRIES - 1:
                             print(f"\n블록 {block} 삭제 실패 (최대 재시도 횟수 초과): {str(e)}")
-                            nand.bad_blocks.add(block)
+                            # 드라이버가 이미 Bad Block으로 마킹하므로 여기서는 오류만 기록
                             errors.append({'block': block, 'error': f"삭제 실패: {str(e)}"})
                         else:
                             print(f"\n블록 {block} 삭제 실패, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
@@ -187,7 +186,7 @@ def erase_and_verify_blocks():
                     if 'error' in verify_result:
                         error_info['error'] = verify_result['error']
                     errors.append(error_info)
-                    nand.bad_blocks.add(block)
+                    nand.mark_bad_block(block) # 드라이버를 통해 Bad Block 마킹
                     print(f"\n블록 {block} 검증 실패. Bad Block으로 마킹합니다.")
 
             processed_blocks += 2 if block_odd < TOTAL_BLOCKS else 1
