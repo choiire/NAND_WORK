@@ -330,20 +330,39 @@ class MT29F4G08ABADAWP:
         
     def scan_bad_blocks(self):
         """전체 NAND를 스캔하여 Bad Block 테이블 구성"""
-        try:
-            for block in range(self.TOTAL_BLOCKS):
-                page = block * self.PAGES_PER_BLOCK
-                
-                # 첫 페이지와 마지막 페이지의 첫 바이트 확인
-                first_page = self.read_page(page, 1)
-                last_page = self.read_page(page + self.PAGES_PER_BLOCK - 1, 1)
-                
-                # 첫 바이트가 0xFF가 아니면 Bad Block
-                if first_page[0] != 0xFF or last_page[0] != 0xFF:
-                    self.mark_bad_block(block)
+        MAX_RETRIES = 3  # 최대 재시도 횟수
+        
+        for block in range(self.TOTAL_BLOCKS):
+            page = block * self.PAGES_PER_BLOCK
+            retry_count = 0
+            block_scan_success = False
+            
+            while retry_count < MAX_RETRIES and not block_scan_success:
+                try:
+                    # 첫 페이지와 마지막 페이지의 첫 바이트 확인
+                    first_page = self.read_page(page, 1)
+                    last_page = self.read_page(page + self.PAGES_PER_BLOCK - 1, 1)
                     
-        except Exception as e:
-            print(f"Bad Block 스캔 중 오류 발생: {str(e)}")
+                    # 첫 바이트가 0xFF가 아니면 Bad Block
+                    if first_page[0] != 0xFF or last_page[0] != 0xFF:
+                        self.mark_bad_block(block)
+                        print(f"Bad Block 발견: 블록 {block}")
+                    
+                    block_scan_success = True
+                    
+                except Exception as e:
+                    retry_count += 1
+                    if retry_count == MAX_RETRIES:
+                        print(f"블록 {block} 스캔 실패 (최대 재시도 횟수 초과): {str(e)}")
+                        # 안전을 위해 스캔에 실패한 블록은 Bad Block으로 표시
+                        self.mark_bad_block(block)
+                    else:
+                        print(f"블록 {block} 스캔 중 오류, 재시도 중... ({retry_count}/{MAX_RETRIES})")
+                        time.sleep(0.1)  # 재시도 전 잠시 대기
+            
+            # 진행 상황 표시 (100블록마다)
+            if block % 100 == 0:
+                print(f"Bad Block 스캔 진행 중: {block}/{self.TOTAL_BLOCKS} 블록 완료")
 
     def find_good_block(self, start_block):
         """주어진 블록부터 시작하여 사용 가능한 블록 찾기"""
