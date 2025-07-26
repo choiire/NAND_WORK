@@ -65,13 +65,74 @@ def validate_directory(dirpath: str) -> None:
     if not os.path.isdir(dirpath):
         raise NotADirectoryError(f"유효한 디렉토리가 아님: {dirpath}")
 
+def verify_block(nand, block_no: int) -> dict:
+    """단일 블록 검증"""
+    PAGES_PER_BLOCK = 64
+    block_start_page = block_no * PAGES_PER_BLOCK
+    MAX_RETRIES = 5
+    TIMEOUT_SECONDS = 5
+    
+    errors = []
+    page_no = block_start_page  # 첫 페이지만 검사
+    
+    # 페이지 읽기 재시도 로직
+    read_success = False
+    for retry in range(MAX_RETRIES):
+        timeout_start = time.time()
+        timeout_occurred = False
+        
+        while True:
+            try:
+                data = nand.read_page(page_no)
+                read_success = True
+                break
+            except Exception as e:
+                if time.time() - timeout_start > TIMEOUT_SECONDS:
+                    timeout_occurred = True
+                    break
+                time.sleep(0.1)
+        
+        if read_success:
+            break
+            
+        if timeout_occurred:
+            if retry == MAX_RETRIES - 1:
+                return {
+                    'success': False,
+                    'error': f"페이지 {page_no} 읽기 실패 (최대 재시도 횟수 초과): 타임아웃"
+                }
+            print(f"\n페이지 {page_no} 읽기 타임아웃, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
+            time.sleep(0.5)  # 다음 재시도 전 잠시 대기
+    
+    if not read_success:
+        return {
+            'success': False,
+            'error': "읽기 실패"
+        }
+    
+    # FF 값 검증
+    if not all(b == 0xFF for b in data):
+        # 오류가 있는 경우 첫 번째 오류 위치와 값 기록
+        for offset, value in enumerate(data):
+            if value != 0xFF:
+                errors.append({
+                    'page': page_no,
+                    'offset': offset,
+                    'value': value
+                })
+                break  # 첫 번째 오류만 기록
+    
+    return {
+        'success': len(errors) == 0,
+        'errors': errors
+    }
+
 def erase_all_blocks(nand):
     """전체 블록 삭제 (Bad Block 포함)"""
     TOTAL_BLOCKS = 4096  # 4Gb = 4096 blocks
     PAGES_PER_BLOCK = 64
     MAX_RETRIES = 5  # 블록 삭제 최대 재시도 횟수
     CHUNK_SIZE = 10  # 한 번에 처리할 블록 수
-    TIMEOUT_SECONDS = 5  # 각 시도당 최대 대기 시간
     
     start_datetime = datetime.now()
     print(f"\n=== 전체 블록 삭제 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
@@ -90,21 +151,30 @@ def erase_all_blocks(nand):
                 block = chunk_start + block_offset
                 page_no = block * PAGES_PER_BLOCK
                 
-                # 블록 삭제 (최대 5번 재시도)
+                # 1. 블록 삭제 (최대 5번 재시도)
                 erase_success = False
                 for retry in range(MAX_RETRIES):
                     try:
                         timeout_start = time.time()
+                        timeout_occurred = False
+                        
                         while True:
                             try:
                                 nand.erase_block(page_no)
                                 erase_success = True
                                 break
                             except Exception as e:
-                                if time.time() - timeout_start > TIMEOUT_SECONDS:
-                                    raise TimeoutError("블록 삭제 타임아웃")
+                                if time.time() - timeout_start > 5:  # 5초 타임아웃
+                                    timeout_occurred = True
+                                    break
                                 time.sleep(0.1)
-                        break
+                        
+                        if erase_success:
+                            break
+                            
+                        if timeout_occurred:
+                            raise TimeoutError("블록 삭제 타임아웃")
+                            
                     except Exception as e:
                         if retry == MAX_RETRIES - 1:
                             print(f"\n블록 {block} 삭제 실패 (최대 재시도 횟수 초과): {str(e)}")
@@ -114,25 +184,21 @@ def erase_all_blocks(nand):
                             })
                         else:
                             print(f"\n블록 {block} 삭제 실패, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
-                            time.sleep(0.1)
+                            time.sleep(0.5)  # 0.5초 대기 후 재시도
                 
                 if not erase_success:
                     continue
                 
-                # 블록 검증 (첫 페이지만)
-                try:
-                    data = nand.read_page(page_no)
-                    if not all(b == 0xFF for b in data):
+                # 2. 블록 검증
+                verify_result = verify_block(nand, block)
+                if not verify_result['success']:
+                    if 'error' in verify_result:
+                        print(f"\n블록 {block} 검증 실패: {verify_result['error']}")
+                    else:
                         print(f"\n블록 {block} 검증 실패: 초기화 오류")
-                        errors.append({
-                            'block': block,
-                            'error': "검증 실패: FF로 초기화되지 않음"
-                        })
-                except Exception as e:
-                    print(f"\n블록 {block} 검증 실패: {str(e)}")
                     errors.append({
                         'block': block,
-                        'error': f"검증 실패: {str(e)}"
+                        'errors': verify_result.get('errors', [])
                     })
                 
                 processed_blocks += 1
@@ -162,14 +228,26 @@ def erase_all_blocks(nand):
                 
                 for error in errors:
                     f.write(f"\n블록 {error['block']}:\n")
-                    f.write(f"  {error['error']}\n")
+                    if 'error' in error:
+                        f.write(f"  {error['error']}\n")
+                    else:
+                        for page_error in error['errors']:
+                            f.write(f"  페이지 {page_error['page']}:\n")
+                            f.write(f"    오프셋 0x{page_error['offset']:04X}에서 "
+                                  f"0x{page_error['value']:02X} 발견 (예상: 0xFF)\n")
             
             print(f"\n오류 상세 내역이 {log_filename} 파일에 저장되었습니다.")
             
             # 처음 5개의 오류만 화면에 출력
             for error in errors[:5]:
                 print(f"\n블록 {error['block']}:")
-                print(f"  {error['error']}")
+                if 'error' in error:
+                    print(f"  {error['error']}")
+                else:
+                    for page_error in error['errors']:
+                        print(f"  페이지 {page_error['page']}:")
+                        print(f"    오프셋 0x{page_error['offset']:04X}에서 "
+                              f"0x{page_error['value']:02X} 발견 (예상: 0xFF)")
             
             if len(errors) > 5:
                 print(f"\n... 외 {len(errors)-5}개 블록에서 문제 발생")
