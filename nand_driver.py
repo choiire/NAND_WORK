@@ -477,6 +477,13 @@ class MT29F4G08ABADAWP:
             
             self.set_data_pins_input()
             
+            # 첫 바이트만 읽을 경우 ECC 없이 직접 읽기
+            if length == 1:
+                GPIO.output(self.RE, GPIO.LOW)
+                byte = self.read_data()
+                GPIO.output(self.RE, GPIO.HIGH)
+                return bytes([byte])
+            
             # ECC 적용된 데이터 읽기
             encoded_data = []
             for _ in range(length + (length // 256) * 32):  # ECC 오버헤드 포함
