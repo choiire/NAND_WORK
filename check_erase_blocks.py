@@ -16,6 +16,8 @@ def verify_block(nand, block_no: int, pages_to_check: list = None) -> dict:
     """
     PAGES_PER_BLOCK = 64
     block_start_page = block_no * PAGES_PER_BLOCK
+    MAX_RETRIES = 5  # 페이지 읽기 최대 재시도 횟수
+    TIMEOUT_SECONDS = 5  # 각 시도당 최대 대기 시간
     
     if pages_to_check is None:
         pages_to_check = [block_start_page]  # 첫 페이지만 검사
@@ -25,19 +27,37 @@ def verify_block(nand, block_no: int, pages_to_check: list = None) -> dict:
     for page_offset in pages_to_check:
         page_no = block_start_page + (page_offset % PAGES_PER_BLOCK)
         
-        # 타임아웃 설정
-        timeout_start = time.time()
-        while True:
-            try:
-                data = nand.read_page(page_no)
+        # 페이지 읽기 재시도 로직
+        read_success = False
+        for retry in range(MAX_RETRIES):
+            timeout_start = time.time()
+            timeout_occurred = False
+            
+            while True:
+                try:
+                    data = nand.read_page(page_no)
+                    read_success = True
+                    break
+                except Exception as e:
+                    if time.time() - timeout_start > TIMEOUT_SECONDS:
+                        timeout_occurred = True
+                        break
+                    time.sleep(0.1)
+            
+            if read_success:
                 break
-            except Exception as e:
-                if time.time() - timeout_start > 5:  # 5초 타임아웃
+                
+            if timeout_occurred:
+                if retry == MAX_RETRIES - 1:
                     return {
                         'success': False,
-                        'error': f"페이지 {page_no} 읽기 타임아웃"
+                        'error': f"페이지 {page_no} 읽기 실패 (최대 재시도 횟수 초과): 타임아웃"
                     }
-                time.sleep(0.1)
+                print(f"\n페이지 {page_no} 읽기 타임아웃, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
+                time.sleep(0.5)  # 다음 재시도 전 잠시 대기
+        
+        if not read_success:
+            continue
         
         # FF 값 검증
         if not all(b == 0xFF for b in data):
@@ -61,7 +81,7 @@ def erase_and_verify_blocks():
     TOTAL_BLOCKS = 4096  # 4Gb = 4096 blocks
     PAGES_PER_BLOCK = 64
     PAGE_SIZE = 2048
-    MAX_RETRIES = 3
+    MAX_RETRIES = 5  # 블록 삭제 최대 재시도 횟수
     CHUNK_SIZE = 10  # 한 번에 처리할 블록 수
     
     try:
@@ -89,7 +109,7 @@ def erase_and_verify_blocks():
                 
                 page_no = block * PAGES_PER_BLOCK
                 
-                # 1. 블록 삭제 (최대 3번 재시도)
+                # 1. 블록 삭제 (최대 5번 재시도)
                 erase_success = False
                 for retry in range(MAX_RETRIES):
                     try:
@@ -140,7 +160,28 @@ def erase_and_verify_blocks():
         else:
             print(f"결과: {len(errors)}개 블록에서 문제 발생")
             
-            # 처음 5개의 오류만 상세 출력
+            # 오류 로그 파일 저장
+            log_filename = f"erase_errors_{start_datetime.strftime('%Y%m%d_%H%M%S')}.txt"
+            with open(log_filename, 'w', encoding='utf-8') as f:
+                f.write(f"=== NAND 블록 삭제 오류 로그 ===\n")
+                f.write(f"시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"종료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"소요 시간: {duration}\n")
+                f.write(f"총 오류 블록 수: {len(errors)}\n\n")
+                
+                for error in errors:
+                    f.write(f"\n블록 {error['block']}:\n")
+                    if 'error' in error:
+                        f.write(f"  {error['error']}\n")
+                    else:
+                        for page_error in error['errors']:
+                            f.write(f"  페이지 {page_error['page']}:\n")
+                            f.write(f"    오프셋 0x{page_error['offset']:04X}에서 "
+                                  f"0x{page_error['value']:02X} 발견 (예상: 0xFF)\n")
+            
+            print(f"\n오류 상세 내역이 {log_filename} 파일에 저장되었습니다.")
+            
+            # 처음 5개의 오류만 화면에 출력
             for error in errors[:5]:
                 print(f"\n블록 {error['block']}:")
                 if 'error' in error:
