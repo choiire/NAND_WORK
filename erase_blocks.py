@@ -3,13 +3,14 @@ import time
 from datetime import datetime
 from nand_driver import MT29F4G08ABADAWP
 
-def verify_block(nand, block_no: int, pages_to_check: list = None) -> dict:
+def verify_block(nand, block_no: int, pages_to_check: list = None, indent: str = "") -> dict:
     """단일 블록 검증. 지정된 모든 페이지가 0xFF로 채워져 있는지 확인합니다.
     
     Args:
         nand: NAND 드라이버 인스턴스
         block_no: 검증할 블록 번호
         pages_to_check: 검사할 페이지 오프셋 리스트 (0-63). None이면 블록 전체를 검사합니다.
+        indent: 출력 들여쓰기 문자열
     
     Returns:
         검증 결과 딕셔너리
@@ -42,7 +43,7 @@ def verify_block(nand, block_no: int, pages_to_check: list = None) -> dict:
                         'success': False,
                         'error': f"페이지 {page_no} 읽기 실패 (최대 재시도 횟수 초과): {e}"
                     }
-                print(f"\n페이지 {page_no} 읽기 오류, 재시도 중... ({retry + 1}/{MAX_RETRIES}): {e}")
+                print(f"\n{indent}페이지 {page_no} 읽기 오류, 재시도 중... ({retry + 1}/{MAX_RETRIES}): {e}")
                 time.sleep(0.5)
         
         if not read_success:
@@ -69,8 +70,6 @@ def verify_block(nand, block_no: int, pages_to_check: list = None) -> dict:
 def erase_and_verify_blocks():
     """전체 블록을 삭제하고 FF로 초기화되었는지 검증 (2-Plane 최적화 적용)"""
     TOTAL_BLOCKS = 4096  # 4Gb = 4096 blocks
-    PAGES_PER_BLOCK = 64
-    PAGE_SIZE = 2048
     MAX_RETRIES = 5  # 블록 삭제 최대 재시도 횟수
 
     try:
@@ -81,140 +80,124 @@ def erase_and_verify_blocks():
         print(f"총 {TOTAL_BLOCKS}개 블록 삭제 예정")
 
         errors = []
-        processed_blocks = 0
-
+        
         # 블록을 2개씩 묶어 처리
         for block_even in range(0, TOTAL_BLOCKS, 2):
             block_odd = block_even + 1
             blocks_to_process_individually = []
             blocks_to_verify = []
 
+            print(f"\n[블록 쌍 {block_even}" + (f", {block_odd}]" if block_odd < TOTAL_BLOCKS else "]"))
+
             # 마지막 블록 처리 (총 블록 수가 홀수일 경우)
             if block_odd >= TOTAL_BLOCKS:
                 if not nand.is_bad_block(block_even):
+                    print(f"  - 정보: 마지막 블록 {block_even} 단일 처리")
                     blocks_to_process_individually.append(block_even)
                 else:
-                    print(f"\n블록 {block_even}은 Bad Block으로 표시되어 있어 건너뜁니다.")
+                    print(f"  - 정보: 블록 {block_even}은(는) Bad Block, 건너뜁니다.")
             else:
                 is_even_bad = nand.is_bad_block(block_even)
                 is_odd_bad = nand.is_bad_block(block_odd)
 
                 # 두 블록 모두 Good Block -> 2-Plane Erase
                 if not is_even_bad and not is_odd_bad:
+                    print("  - 2-Plane 삭제 시도...")
                     erase_success = False
                     for retry in range(MAX_RETRIES):
                         try:
                             nand.erase_two_blocks(block_even, block_odd)
                             erase_success = True
+                            print("    - 성공")
                             break
                         except Exception as e:
-                            if retry == MAX_RETRIES - 1:
-                                print(f"\n2-Plane 블록 삭제 실패 ({block_even}, {block_odd}): {str(e)}")
-                                # 드라이버가 이미 Bad Block으로 마킹하므로 여기서는 오류만 기록
+                            if retry < MAX_RETRIES - 1:
+                                print(f"    - [경고] 2-Plane 삭제 실패, 재시도 중... ({retry + 1}/{MAX_RETRIES}): {e}")
+                                time.sleep(0.1)
+                            else:
+                                print(f"    - [오류] 2-Plane 삭제 최종 실패: {e}")
                                 errors.append({'block': block_even, 'error': f"2-Plane Erase 실패: {str(e)}"})
                                 errors.append({'block': block_odd, 'error': f"2-Plane Erase 실패: {str(e)}"})
-                            else:
-                                print(f"\n2-Plane 블록 삭제 실패 ({block_even}, {block_odd}), 재시도 중... ({retry + 1}/{MAX_RETRIES})")
-                                time.sleep(0.1)
                     if erase_success:
                         blocks_to_verify.extend([block_even, block_odd])
                 # 하나라도 Bad Block -> 단일 Erase
                 else:
+                    print("  - 정보: Bad Block이 포함되어 있어 단일 처리합니다.")
                     if not is_even_bad:
                         blocks_to_process_individually.append(block_even)
                     else:
-                        print(f"\n블록 {block_even}은 Bad Block으로 표시되어 있어 건너뜁니다.")
+                        print(f"    - 정보: 블록 {block_even}은(는) Bad Block, 건너뜁니다.")
 
                     if not is_odd_bad:
                         blocks_to_process_individually.append(block_odd)
                     else:
-                        print(f"\n블록 {block_odd}은 Bad Block으로 표시되어 있어 건너뜁니다.")
+                        print(f"    - 정보: 블록 {block_odd}은(는) Bad Block, 건너뜁니다.")
 
             # 단일 블록 처리
             for block in blocks_to_process_individually:
+                print(f"  - 단일 삭제 시도 (블록 {block})...")
                 erase_success = False
                 for retry in range(MAX_RETRIES):
                     try:
                         nand.erase_block(block)
                         erase_success = True
+                        print("    - 성공")
                         break
                     except Exception as e:
-                        if retry == MAX_RETRIES - 1:
-                            print(f"\n블록 {block} 삭제 실패 (최대 재시도 횟수 초과): {str(e)}")
-                            # 드라이버가 이미 Bad Block으로 마킹하므로 여기서는 오류만 기록
-                            errors.append({'block': block, 'error': f"삭제 실패: {str(e)}"})
-                        else:
-                            print(f"\n블록 {block} 삭제 실패, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
+                        if retry < MAX_RETRIES - 1:
+                            print(f"    - [경고] 단일 삭제 실패, 재시도 중... ({retry + 1}/{MAX_RETRIES}): {e}")
                             time.sleep(0.1)
+                        else:
+                            print(f"    - [오류] 단일 삭제 최종 실패: {e}")
+                            errors.append({'block': block, 'error': f"삭제 실패: {str(e)}"})
                 if erase_success:
                     blocks_to_verify.append(block)
 
             # 검증
             for block in blocks_to_verify:
-                verify_result = verify_block(nand, block)
-                if not verify_result['success']:
+                print(f"  - 검증 시작 (블록 {block})...")
+                verify_result = verify_block(nand, block, indent="    ")
+                if verify_result['success']:
+                    print("    - 성공: 모든 페이지가 0xFF 입니다.")
+                else:
                     error_info = {'block': block, 'errors': verify_result.get('errors', [])}
                     if 'error' in verify_result:
                         error_info['error'] = verify_result['error']
+                        print(f"    - [오류] 검증 실패 (페이지 읽기 오류): {verify_result['error']}")
+                    else:
+                        print(f"    - [오류] 검증 실패 (데이터 불일치).")
+                        for page_error in verify_result['errors']:
+                            print(f"      - 페이지 {page_error['page']}, 오프셋 0x{page_error['offset']:04X}에서 0x{page_error['value']:02X} 값 발견 (예상: 0xFF)")
+                    
                     errors.append(error_info)
-                    nand.mark_bad_block(block) # 드라이버를 통해 Bad Block 마킹
-                    print(f"\n블록 {block} 검증 실패. Bad Block으로 마킹합니다.")
-
-            processed_blocks += 2 if block_odd < TOTAL_BLOCKS else 1
-            if processed_blocks % 10 < 2:
-                sys.stdout.write(f"\r작업 중: {processed_blocks}/{TOTAL_BLOCKS} 블록")
-                sys.stdout.flush()
+                    nand.mark_bad_block(block)
 
         # 3. 결과 출력
         end_datetime = datetime.now()
         duration = end_datetime - start_datetime
         print(f"\n\n=== 작업 완료 (소요 시간: {duration}) ===")
-        
+
         if not errors:
             print("결과: 모든 블록이 성공적으로 초기화됨 (FF)")
             return True
         else:
-            print(f"결과: {len(errors)}개 블록에서 문제 발생")
-            
-            # 오류 로그 파일 저장
-            log_filename = f"erase_errors_{start_datetime.strftime('%Y%m%d_%H%M%S')}.txt"
-            with open(log_filename, 'w', encoding='utf-8') as f:
-                f.write(f"=== NAND 블록 삭제 오류 로그 ===\n")
-                f.write(f"시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"종료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"소요 시간: {duration}\n")
-                f.write(f"총 오류 블록 수: {len(errors)}\n\n")
-                
-                for error in errors:
-                    f.write(f"\n블록 {error['block']}:\n")
-                    if 'error' in error:
-                        f.write(f"  {error['error']}\n")
-                    else:
-                        for page_error in error['errors']:
-                            f.write(f"  페이지 {page_error['page']}:\n")
-                            f.write(f"    오프셋 0x{page_error['offset']:04X}에서 "
-                                  f"0x{page_error['value']:02X} 발견 (예상: 0xFF)\n")
-            
-            print(f"\n오류 상세 내역이 {log_filename} 파일에 저장되었습니다.")
-            
-            # 처음 5개의 오류만 화면에 출력
-            for error in errors[:5]:
-                print(f"\n블록 {error['block']}:")
-                if 'error' in error:
-                    print(f"  {error['error']}")
-                else:
-                    for page_error in error['errors']:
-                        print(f"  페이지 {page_error['page']}:")
-                        print(f"    오프셋 0x{page_error['offset']:04X}에서 "
-                              f"0x{page_error['value']:02X} 발견 (예상: 0xFF)")
-            
-            if len(errors) > 5:
-                print(f"\n... 외 {len(errors)-5}개 블록에서 문제 발생")
+            print(f"결과: 총 {len(errors)}개 블록에서 문제 발생. 상세 내용은 위 로그를 확인하세요.")
             return False
             
     except Exception as e:
-        print(f"\n치명적 오류 발생: {str(e)}")
+        print(f"\n[치명적 오류] 스크립트 실행 중단: {str(e)}")
         return False
 
 if __name__ == "__main__":
-    erase_and_verify_blocks() 
+    success = False
+    try:
+        success = erase_and_verify_blocks()
+    finally:
+        import RPi.GPIO as GPIO
+        GPIO.cleanup()
+        print("\nGPIO 리소스가 정리되었습니다.")
+    
+    if success:
+        sys.exit(0)
+    else:
+        sys.exit(1) 

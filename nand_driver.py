@@ -61,15 +61,17 @@ class MT29F4G08ABADAWP:
     def __del__(self):
         """객체 소멸 시 GPIO 리소스를 정리합니다."""
         print("GPIO 리소스를 정리합니다.")
-        GPIO.cleanup()
+        # GPIO.cleanup() # 스크립트의 메인 로직 마지막에 한 번만 호출하는 것이 더 안정적입니다.
 
     def set_data_pins_output(self):
         for pin in self.IO_pins:
             GPIO.setup(pin, GPIO.OUT)
+        time.sleep(1e-6) # 핀 방향 전환 후 안정화 시간
 
     def set_data_pins_input(self):
         for pin in self.IO_pins:
             GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_OFF)
+        time.sleep(1e-6) # 핀 방향 전환 후 안정화 시간
 
     def _write_to_bus(self, value):
         for i in range(8):
