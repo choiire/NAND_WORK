@@ -2,6 +2,7 @@ import os
 import sys
 from datetime import datetime
 from nand_driver import MT29F4G08ABADAWP
+import time # Added for time.time() and time.sleep()
 
 def hex_to_int(hex_str: str) -> int:
     """16진수 문자열을 정수로 변환"""
@@ -67,47 +68,125 @@ def validate_directory(dirpath: str) -> None:
 def erase_all_blocks(nand):
     """전체 블록 삭제"""
     TOTAL_BLOCKS = 4096  # 4Gb = 4096 blocks
-    MAX_RETRIES = 3
+    PAGES_PER_BLOCK = 64
+    MAX_RETRIES = 5  # 블록 삭제 최대 재시도 횟수
+    CHUNK_SIZE = 10  # 한 번에 처리할 블록 수
+    TIMEOUT_SECONDS = 5  # 각 시도당 최대 대기 시간
     
     start_datetime = datetime.now()
     print(f"\n=== 전체 블록 삭제 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
     print(f"총 {TOTAL_BLOCKS}개 블록 삭제 예정")
     
-    failed_blocks = []
+    errors = []
+    processed_blocks = 0
     
     try:
-        for block in range(TOTAL_BLOCKS):
-            if nand.is_bad_block(block):
-                print(f"\n블록 {block}은 Bad Block으로 표시되어 있어 건너뜁니다.")
-                continue
+        # 청크 단위로 처리
+        for chunk_start in range(0, TOTAL_BLOCKS, CHUNK_SIZE):
+            chunk_end = min(chunk_start + CHUNK_SIZE, TOTAL_BLOCKS)
+            chunk_blocks = chunk_end - chunk_start
+            
+            for block_offset in range(chunk_blocks):
+                block = chunk_start + block_offset
                 
-            # 각 블록의 첫 페이지 번호 계산 (블록당 64페이지)
-            page_no = block * 64
-            
-            # 최대 3번 재시도
-            for retry in range(MAX_RETRIES):
+                # Bad Block 체크
+                if nand.is_bad_block(block):
+                    print(f"\n블록 {block}은 Bad Block으로 표시되어 있어 건너뜁니다.")
+                    continue
+                
+                page_no = block * PAGES_PER_BLOCK
+                
+                # 블록 삭제 (최대 5번 재시도)
+                erase_success = False
+                for retry in range(MAX_RETRIES):
+                    try:
+                        timeout_start = time.time()
+                        while True:
+                            try:
+                                nand.erase_block(page_no)
+                                erase_success = True
+                                break
+                            except Exception as e:
+                                if time.time() - timeout_start > TIMEOUT_SECONDS:
+                                    raise TimeoutError("블록 삭제 타임아웃")
+                                time.sleep(0.1)
+                        break
+                    except Exception as e:
+                        if retry == MAX_RETRIES - 1:
+                            print(f"\n블록 {block} 삭제 실패 (최대 재시도 횟수 초과): {str(e)}")
+                            nand.mark_bad_block(block)
+                            errors.append({
+                                'block': block,
+                                'error': f"삭제 실패: {str(e)}"
+                            })
+                        else:
+                            print(f"\n블록 {block} 삭제 실패, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
+                            time.sleep(0.1)
+                
+                if not erase_success:
+                    continue
+                
+                # 블록 검증 (첫 페이지만)
                 try:
-                    nand.erase_block(page_no)
-                    break
-                except Exception as e:
-                    if retry == MAX_RETRIES - 1:
-                        print(f"\n블록 {block} 삭제 실패 (최대 재시도 횟수 초과)")
-                        failed_blocks.append(block)
+                    data = nand.read_page(page_no)
+                    if not all(b == 0xFF for b in data):
+                        print(f"\n블록 {block} 검증 실패: 초기화 오류")
                         nand.mark_bad_block(block)
-                    else:
-                        print(f"\n블록 {block} 삭제 실패, 재시도 중... ({retry + 1}/{MAX_RETRIES})")
+                        errors.append({
+                            'block': block,
+                            'error': "검증 실패: FF로 초기화되지 않음"
+                        })
+                except Exception as e:
+                    print(f"\n블록 {block} 검증 실패: {str(e)}")
+                    nand.mark_bad_block(block)
+                    errors.append({
+                        'block': block,
+                        'error': f"검증 실패: {str(e)}"
+                    })
+                
+                processed_blocks += 1
+                if processed_blocks % 10 == 0:
+                    sys.stdout.write(f"\r작업 중: {processed_blocks}/{TOTAL_BLOCKS} 블록")
+                    sys.stdout.flush()
+        
+        # 결과 출력
+        end_datetime = datetime.now()
+        duration = end_datetime - start_datetime
+        print(f"\n\n=== 작업 완료 (소요 시간: {duration}) ===")
+        
+        if not errors:
+            print("결과: 모든 블록이 성공적으로 초기화됨 (FF)")
+            return True
+        else:
+            print(f"결과: {len(errors)}개 블록에서 문제 발생")
             
-            if (block + 1) % 10 == 0:  # 10블록마다 진행상황 출력
-                sys.stdout.write(f"\r블록 삭제 중: {block + 1}/{TOTAL_BLOCKS} 블록")
-                sys.stdout.flush()
-        
-        if failed_blocks:
-            print(f"\n삭제 실패한 블록들: {failed_blocks}")
-        print("\n전체 블록 삭제 완료")
-        
+            # 오류 로그 파일 저장
+            log_filename = f"erase_errors_{start_datetime.strftime('%Y%m%d_%H%M%S')}.txt"
+            with open(log_filename, 'w', encoding='utf-8') as f:
+                f.write(f"=== NAND 블록 삭제 오류 로그 ===\n")
+                f.write(f"시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"종료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"소요 시간: {duration}\n")
+                f.write(f"총 오류 블록 수: {len(errors)}\n\n")
+                
+                for error in errors:
+                    f.write(f"\n블록 {error['block']}:\n")
+                    f.write(f"  {error['error']}\n")
+            
+            print(f"\n오류 상세 내역이 {log_filename} 파일에 저장되었습니다.")
+            
+            # 처음 5개의 오류만 화면에 출력
+            for error in errors[:5]:
+                print(f"\n블록 {error['block']}:")
+                print(f"  {error['error']}")
+            
+            if len(errors) > 5:
+                print(f"\n... 외 {len(errors)-5}개 블록에서 문제 발생")
+            return False
+            
     except Exception as e:
-        print(f"\n블록 삭제 중 오류 발생: {str(e)}")
-        raise
+        print(f"\n치명적 오류 발생: {str(e)}")
+        return False
 
 def program_nand():
     try:
