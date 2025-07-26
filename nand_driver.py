@@ -381,45 +381,79 @@ class MT29F4G08ABADAWP:
             if len(data) < self.PAGE_SIZE:
                 data = data + b'\xFF' * (self.PAGE_SIZE - len(data))
             
-            # 페이지 프로그래밍 시작
+            # 1. 페이지 프로그래밍 시작
             self.set_data_pins_output()
             self.write_command(0x80)  # Serial Data Input
+            time.sleep(0.000070)  # tADL: 70ns
             
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
             GPIO.output(self.ALE, GPIO.HIGH)
             
-            # Column Address (0x0000)
-            GPIO.output(self.WE, GPIO.LOW)
-            self.write_data(0x00)
-            GPIO.output(self.WE, GPIO.HIGH)
+            # 2. Column Address (0x0000)
+            for _ in range(2):
+                GPIO.output(self.WE, GPIO.LOW)
+                time.sleep(0.000012)  # tWP: 12ns
+                self.write_data(0x00)
+                time.sleep(0.000010)  # tDS: 10ns
+                GPIO.output(self.WE, GPIO.HIGH)
+                time.sleep(0.000005)  # tDH: 5ns
             
-            GPIO.output(self.WE, GPIO.LOW)
-            self.write_data(0x00)
-            GPIO.output(self.WE, GPIO.HIGH)
-            
-            # Row Address (3바이트)
+            # 3. Row Address (3바이트)
             for i in range(3):
                 GPIO.output(self.WE, GPIO.LOW)
+                time.sleep(0.000012)  # tWP: 12ns
                 self.write_data((page_no >> (8 * i)) & 0xFF)
+                time.sleep(0.000010)  # tDS: 10ns
                 GPIO.output(self.WE, GPIO.HIGH)
+                time.sleep(0.000005)  # tDH: 5ns
                 
             GPIO.output(self.ALE, GPIO.LOW)
+            time.sleep(0.000070)  # tADL: 70ns
             
-            # 데이터 쓰기
+            # 4. 데이터 쓰기
             for byte in data[:self.PAGE_SIZE]:
                 GPIO.output(self.WE, GPIO.LOW)
+                time.sleep(0.000012)  # tWP: 12ns
                 self.write_data(byte)
+                time.sleep(0.000010)  # tDS: 10ns
                 GPIO.output(self.WE, GPIO.HIGH)
+                time.sleep(0.000005)  # tDH: 5ns
             
-            # 프로그래밍 시작
+            # 5. 프로그래밍 시작
             self.write_command(0x10)
-            self.wait_ready()
+            time.sleep(0.000100)  # tWB: 100ns
             
-            # 상태 확인
-            if not self.check_operation_status():
-                self.mark_bad_block(block_no)
-                raise RuntimeError("페이지 쓰기 실패")
+            # 6. R/B# LOW 확인
+            timeout_start = time.time()
+            while GPIO.input(self.RB) == GPIO.HIGH:
+                if time.time() - timeout_start > 0.001:  # 1ms 타임아웃
+                    break
+                time.sleep(0.000100)  # 100ns 간격으로 체크
+            
+            # 7. 프로그래밍 완료 대기
+            timeout_start = time.time()
+            while GPIO.input(self.RB) == GPIO.LOW:
+                if time.time() - timeout_start > 0.001:  # 1ms 타임아웃
+                    self.write_command(0xFF)  # Reset
+                    time.sleep(0.000005)  # tRST: 5us
+                    raise RuntimeError("프로그래밍 타임아웃")
+                time.sleep(0.000100)  # 100ns 간격으로 체크
+            
+            # 8. 프로그래밍 후 안정화 대기
+            time.sleep(0.000700)  # tPROG: 700us (최대값 사용)
+            
+            # 9. 상태 확인
+            retry_count = 0
+            while retry_count < 5:  # 최대 5번 재시도
+                try:
+                    if self.check_operation_status():
+                        return
+                except:
+                    retry_count += 1
+                    time.sleep(0.000100)  # 100ns 대기 후 재시도
+            
+            raise RuntimeError("페이지 쓰기 실패")
                 
         except Exception as e:
             self.reset_pins()
