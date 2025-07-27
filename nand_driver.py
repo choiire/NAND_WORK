@@ -276,10 +276,22 @@ class MT29F4G08ABADAWP:
             # SET FEATURES (EFh) 명령
             self.write_command(0xEF)
 
-            # Feature Address (90h)
-            self.write_address(0x90) # write_address를 사용하면 ALE 신호 제어가 용이
+            # Feature Address (90h) 전송
+            GPIO.output(self.CE, GPIO.LOW)
+            GPIO.output(self.CLE, GPIO.LOW)
+            GPIO.output(self.ALE, GPIO.HIGH)
+            self._delay_ns(10) # tALS
 
-            # Parameters (P1=08h, P2-P4=00h)
+            GPIO.output(self.WE, GPIO.LOW)
+            self._delay_ns(12) # tWP
+            self.write_data(0x90) # Feature Address
+            GPIO.output(self.WE, GPIO.HIGH)
+            self._delay_ns(10) # tWH
+            
+            GPIO.output(self.ALE, GPIO.LOW)
+            self._delay_ns(70) # tADL (Address to Data Latch Delay)
+
+            # Parameters (P1=08h for ECC Enable, P2-P4=00h) 전송
             params = [0x08, 0x00, 0x00, 0x00]
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
@@ -292,8 +304,9 @@ class MT29F4G08ABADAWP:
                 GPIO.output(self.WE, GPIO.HIGH)
                 self._delay_ns(10) # tWH
             
-            self.wait_ready() # tFEAT 대기 (최대 1us)
+            self.wait_ready() # tFEAT (Feature operation time) 대기
             print("내부 ECC 엔진이 성공적으로 활성화되었습니다.")
+
         except Exception as e:
             raise RuntimeError(f"내부 ECC 활성화 실패: {str(e)}")
         finally:
@@ -726,8 +739,7 @@ class MT29F4G08ABADAWP:
             self.write_command(0xD1) # 첫 번째 플레인 확정
             
             # tDBSY 대기 (Busy for Two-Plane Operation). 데이터시트 상 최대 1us.
-            self._delay_ns(1000) # 1us 대기
-            self.wait_ready() # 실제로는 R/B# 신호를 확인하는 것이 더 정확
+            self._delay_ns(1000) # 1us
 
             # [Plane 2] 두 번째 블록 주소 전송 및 동시 실행
             self.write_command(0x60)
