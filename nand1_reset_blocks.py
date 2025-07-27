@@ -500,29 +500,39 @@ if __name__ == "__main__":
     # 사용자에게 검증 수준 선택 안내
     print("NAND 블록 초기화 및 검증 프로그램 (Two-Plane 기능 지원)")
     print("=" * 60)
-    print("1. 빠른 검증 (Two-Plane, 첫/마지막 페이지 첫 바이트만, 0.0015% 커버리지)")
-    print("2. 샘플링 검증 (Two-Plane, 여러 페이지/위치 샘플링, 0.019% 커버리지)")
-    print("3. 전체 검증 (Two-Plane, 모든 바이트 확인, 100% 커버리지, 매우 느림)")
-    print("4. 삭제 후 Bad Block 스캔")
+
+    # [수정] 프로그램 시작 시 드라이버를 한 번만 초기화합니다.
+    try:
+        print("NAND 드라이버 초기화 중 (공장 Bad Block 스캔)...")
+        # 시작할 때 공장 Bad Block을 스캔하는 것이 안전합니다.
+        nand_chip = MT29F4G08ABADAWP(skip_bad_block_scan=False) 
+    except Exception as e:
+        print(f"드라이버 초기화 실패: {e}")
+        sys.exit(1)
+
+    print("=" * 60)
+    print("1. 빠른 검증 (Two-Plane, 첫/마지막 페이지 첫 바이트만)")
+    print("2. 샘플링 검증 (Two-Plane, 여러 페이지/위치 샘플링)")
+    print("3. 전체 검증 (Two-Plane, 모든 바이트 확인, 매우 느림)")
+    print("4. 현재 상태에서 Bad Block 스캔 (삭제 안 함)")
     print("5. 종료")
     
     while True:
-        choice = input("\n검증 수준을 선택하세요 (1-5): ")
+        choice = input("\n작업을 선택하세요 (1-5): ")
         
-        if choice == "1":
-            success = erase_and_verify_blocks_two_plane(verification_level="quick")
-            sys.exit(0 if success else 1)
-        elif choice == "2":
-            success = erase_and_verify_blocks_two_plane(verification_level="sample")
-            sys.exit(0 if success else 1)
-        elif choice == "3":
-            success = erase_and_verify_blocks_two_plane(verification_level="full")
-            sys.exit(0 if success else 1)
+        # [수정] 모든 호출에 생성된 nand_chip 객체를 전달합니다.
+        if choice in ["1", "2", "3"]:
+            level_map = {"1": "quick", "2": "sample", "3": "full"}
+            print("\n경고: 모든 블록을 강제로 삭제하고 다시 검증합니다. 기존 Bad Block 정보는 초기화됩니다.")
+            confirm = input("계속하시겠습니까? (y/n): ")
+            if confirm.lower() == 'y':
+                success = erase_and_verify_blocks_two_plane(nand_chip, verification_level=level_map[choice])
+                sys.exit(0 if success else 1)
         elif choice == "4":
-            scan_bad_blocks_after_erase(MT29F4G08ABADAWP()) # 실제 NAND 드라이버 인스턴스 사용
-            sys.exit(0)
+            # [수정] scan_bad_blocks_after_erase 함수에도 nand_chip 객체를 전달해야 합니다.
+            scan_bad_blocks_after_erase(nand_chip)
         elif choice == "5":
             print("프로그램을 종료합니다.")
             sys.exit(0)
         else:
-            print("잘못된 선택입니다. 다시 시도하세요.") 
+            print("잘못된 선택입니다. 다시 시도하세요.")
