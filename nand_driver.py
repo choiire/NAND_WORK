@@ -589,38 +589,41 @@ class MT29F4G08ABADAWP:
             # [5] page_no2의 ECC 상태 확인 및 데이터 읽기
             status2 = self.check_read_status()
             if status2 == "UNCORRECTABLE_ERROR":
-                print(f"경고: 페이지 {page_no2}에서 수정 불가능한 ECC 오류 발생!")
+                print(f"\n경고: 페이지 {page_no2}에서 수정 불가능한 ECC 오류 발생!")
                 data2 = b'\xFF' * length
             else:
+                self.set_data_pins_input() # <<-- 읽기 직전에 입력으로 변경
                 GPIO.output(self.CE, GPIO.LOW)
                 read_bytes_2 = [self.read_data() for _ in range(length)]
                 data2 = bytes(read_bytes_2)
                 GPIO.output(self.CE, GPIO.HIGH)
+                self.set_data_pins_output() # <<-- 읽기 직후에 출력으로 복원
 
-            # [6] 플레인 변경 (RANDOM DATA READ TWO-PLANE)
+            # [6] 6. 플레인 변경 (이제 핀이 출력 모드이므로 안전)
             self.write_command(0x06)
             self._write_full_address(page_no1)
             self.write_command(0xE0)
             self._delay_ns(self.tWHR)
 
-            # [7] page_no1의 ECC 상태 확인 및 데이터 읽기
+            # [7] 7. page_no1의 ECC 상태 확인 및 데이터 읽기
             status1 = self.check_read_status()
             if status1 == "UNCORRECTABLE_ERROR":
-                print(f"경고: 페이지 {page_no1}에서 수정 불가능한 ECC 오류 발생!")
+                print(f"\n경고: 페이지 {page_no1}에서 수정 불가능한 ECC 오류 발생!")
                 data1 = b'\xFF' * length
             else:
+                self.set_data_pins_input() # <<-- 다시 읽기 직전에 입력으로 변경
                 GPIO.output(self.CE, GPIO.LOW)
                 read_bytes_1 = [self.read_data() for _ in range(length)]
                 data1 = bytes(read_bytes_1)
                 GPIO.output(self.CE, GPIO.HIGH)
+                self.set_data_pins_output() # <<-- 읽기 직후에 출력으로 복원
 
             return data1, data2
 
         except Exception as e:
-            self.reset_pins()
             raise RuntimeError(f"Two-plane 페이지 읽기 실패 ({page_no1}, {page_no2}): {str(e)}")
         finally:
-            self.set_data_pins_output()
+            self.reset_pins() # 최종적으로 핀 상태를 안전하게 복원
             
     def _write_row_address(self, page_no: int):
         """
