@@ -38,7 +38,7 @@ class MT29F4G08ABADAWP:
             GPIO.setwarnings(False)
             
             # 컨트롤 핀 출력으로 설정
-            GPIO.setup(self.RB, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # R/B# 핀은 풀업 저항 사용
+            GPIO.setup(self.RB, GPIO.IN)
             GPIO.setup(self.RE, GPIO.OUT, initial=GPIO.HIGH)
             GPIO.setup(self.CE, GPIO.OUT, initial=GPIO.HIGH)
             GPIO.setup(self.CLE, GPIO.OUT, initial=GPIO.LOW)
@@ -56,12 +56,6 @@ class MT29F4G08ABADAWP:
             
             # 파워온 시퀀스
             self.power_on_sequence()
-            
-            # Bad Block 스캔 (옵션)
-            if not skip_bad_block_scan:
-                self.scan_bad_blocks()
-            else:
-                print("Bad Block 스캔을 건너뜁니다.")
             
         except Exception as e:
             GPIO.cleanup()
@@ -585,7 +579,29 @@ class MT29F4G08ABADAWP:
             raise RuntimeError(f"페이지 읽기 실패 (페이지 {page_no}): {str(e)}")
         finally:
             self.set_data_pins_output()
+    
+    def _write_row_address(self, page_no: int):
+        """블록 지우기/읽기/쓰기에 사용되는 3바이트 Row Address를 전송합니다."""
+        GPIO.output(self.CE, GPIO.LOW)
+        GPIO.output(self.CLE, GPIO.LOW)
+        GPIO.output(self.ALE, GPIO.HIGH)
+        
+        # Row Address (3바이트) 전송
+        # 데이터시트에 따르면 페이지 주소(PA)와 블록 주소(BA)가 포함됩니다.
+        # erase_block의 경우 블록 주소만 유효합니다.
+        row_address = page_no 
+        for i in range(3):
+            GPIO.output(self.WE, GPIO.LOW)
+            time.sleep(0.00002)
+            # 3-cycle 주소 입력. 페이지 번호에서 로우 주소를 계산합니다.
+            self.write_data((row_address >> (8 * i)) & 0xFF)
+            time.sleep(0.00002)
+            GPIO.output(self.WE, GPIO.HIGH)
+            time.sleep(0.00002)
             
+        GPIO.output(self.ALE, GPIO.LOW)
+        time.sleep(0.0002) # tADL
+    
     def erase_block(self, page_no: int):
         """블록 단위 erase
         
@@ -602,28 +618,14 @@ class MT29F4G08ABADAWP:
             # Block Erase 커맨드 (0x60)
             self.write_command(0x60)
 
-            # Row Address (3바이트) - 더 정확한 타이밍
-            GPIO.output(self.CE, GPIO.LOW)
-            GPIO.output(self.CLE, GPIO.LOW)
-            GPIO.output(self.ALE, GPIO.HIGH)
-            
-            for i in range(3):
-                GPIO.output(self.WE, GPIO.LOW)
-                time.sleep(0.00002)  # tWP (WE# pulse width) 더 길게
-                self.write_data((page_no >> (8 * i)) & 0xFF)
-                time.sleep(0.00002)
-                GPIO.output(self.WE, GPIO.HIGH)
-                time.sleep(0.00002)  # tWH (WE# high hold time) 더 길게
-                
-            GPIO.output(self.ALE, GPIO.LOW)
-
-            # tADL (ALE to data loading time) 더 긴 대기
-            time.sleep(0.0002)  # 200us (기존 100us에서 증가)
+            # Row Address (3바이트) - 헬퍼 함수 사용
+            self._write_row_address(page_no)
 
             # Confirm (0xD0)
             self.write_command(0xD0)
-            # tWB 대기 (WE# high to R/B# low) 더 길게
-            time.sleep(0.00015)  # 150us (기존 100ns에서 크게 증가)
+            
+            # tWB 대기
+            time.sleep(0.00015)
 
             # Ready 대기 (tBERS) - 더 긴 타임아웃
             timeout_start = time.time()
@@ -683,3 +685,72 @@ class MT29F4G08ABADAWP:
                 time.sleep(0.002)  # 2ms 대기 (더 길게)
             except:
                 pass 
+    
+    def erase_block_two_plane(self, page_no1: int, page_no2: int):
+        """
+        서로 다른 플레인에 있는 두 개의 블록을 동시에 지웁니다.
+        
+        요구 조건:
+        - 두 블록은 서로 다른 플레인에 있어야 합니다. (블록 번호의 6번째 비트가 달라야 함)
+        - 두 주소의 페이지 오프셋(PA[5:0])은 동일해야 합니다.
+        """
+        try:
+            # 1. 두 페이지 주소 및 블록 번호 유효성 검사
+            self.validate_page(page_no1)
+            self.validate_page(page_no2)
+            block_no1 = page_no1 // self.PAGES_PER_BLOCK
+            block_no2 = page_no2 // self.PAGES_PER_BLOCK
+            self.validate_block(block_no1)
+            self.validate_block(block_no2)
+            
+            # 2. Two-Plane 동작 요구 조건 검사
+            # 조건 1: 서로 다른 플레인에 위치해야 함 (BA[6] 비트 비교)
+            if ((block_no1 >> 6) & 1) == ((block_no2 >> 6) & 1):
+                raise ValueError("두 블록이 동일한 플레인에 있습니다. Two-plane erase가 불가능합니다.")
+            
+            # 조건 2: 페이지 오프셋이 동일해야 함 (PA[5:0] 비교)
+            if (page_no1 % self.PAGES_PER_BLOCK) != (page_no2 % self.PAGES_PER_BLOCK):
+                raise ValueError("두 주소의 페이지 오프셋이 다릅니다. Two-plane erase가 불가능합니다.")
+
+            # --- Two-Plane Erase 시퀀스 시작 ---
+
+            # [Plane 1] 첫 번째 블록 주소 전송
+            self.write_command(0x60)
+            self._write_row_address(page_no1)
+            self.write_command(0xD1) # 첫 번째 플레인 확정
+            
+            # tDBSY 대기 (Busy for Two-Plane Operation). 데이터시트 상 최대 1us.
+            time.sleep(0.00001) # 10us로 여유있게 대기
+            self.wait_ready() # 실제로는 R/B# 신호를 확인하는 것이 더 정확
+
+            # [Plane 2] 두 번째 블록 주소 전송 및 동시 실행
+            self.write_command(0x60)
+            self._write_row_address(page_no2)
+            self.write_command(0xD0) # 두 번째 플레인 확정 및 동시 삭제 시작
+            
+            # tWB 대기
+            time.sleep(0.00015)
+
+            # Ready 대기 (tBERS). 기존 erase_block과 동일한 로직 사용
+            timeout_start = time.time()
+            while GPIO.input(self.RB) == GPIO.LOW:
+                if time.time() - timeout_start > 0.020: # 20ms 타임아웃
+                    self.write_command(0xFF) # Reset
+                    time.sleep(0.001)
+                    self.wait_ready()
+                    raise RuntimeError(f"블록 삭제 타임아웃 (블록 {block_no1}, {block_no2})")
+                time.sleep(0.0002)
+
+            time.sleep(0.001)
+
+            # 상태 확인
+            # 참고: 실패 시(FAIL=1), 어떤 플레인이 실패했는지 알려면 78h(READ STATUS ENHANCED) 명령이 필요.
+            # 여기서는 간소하게 둘 중 하나라도 실패하면 에러로 처리.
+            if not self.check_operation_status():
+                raise RuntimeError("Two-plane 블록 삭제 상태 확인 실패")
+
+        except Exception as e:
+            raise RuntimeError(f"Two-plane 블록 삭제 실패 (블록 {block_no1}, {block_no2}): {str(e)}")
+        finally:
+            self.reset_pins()
+            time.sleep(0.002)
