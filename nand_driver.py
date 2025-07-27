@@ -513,15 +513,9 @@ class MT29F4G08ABADAWP:
             # [5] (오류 수정된) 데이터 읽기
             self.set_data_pins_input()
             GPIO.output(self.CE, GPIO.LOW)
-            
-            read_bytes = []
-            for _ in range(length): # 스페어 영역 제외하고 메인 데이터만 읽기
-                GPIO.output(self.RE, GPIO.LOW)
-                self._delay_ns(22) # tREA
-                byte = self.read_data()
-                GPIO.output(self.RE, GPIO.HIGH)
-                self._delay_ns(10) # tREH
-                read_bytes.append(byte)
+            read_bytes = [self.read_data() for _ in range(length)]
+            GPIO.output(self.CE, GPIO.HIGH)
+            # 읽기 후에는 finally 블록에서 출력 모드로 자동 복원됨
                 
             return bytes(read_bytes)
             
@@ -583,9 +577,6 @@ class MT29F4G08ABADAWP:
             # [4] 두 페이지 데이터가 캐시로 로드될 때까지 대기 (tR)
             self.wait_ready()
             
-            # --- 데이터 버스에서 순차적으로 읽기 ---
-            self.set_data_pins_input()
-            
             # [5] page_no2의 ECC 상태 확인 및 데이터 읽기
             status2 = self.check_read_status()
             if status2 == "UNCORRECTABLE_ERROR":
@@ -616,7 +607,6 @@ class MT29F4G08ABADAWP:
                 read_bytes_1 = [self.read_data() for _ in range(length)]
                 data1 = bytes(read_bytes_1)
                 GPIO.output(self.CE, GPIO.HIGH)
-                self.set_data_pins_output() # <<-- 읽기 직후에 출력으로 복원
 
             return data1, data2
 

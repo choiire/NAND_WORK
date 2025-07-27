@@ -284,7 +284,7 @@ def scan_bad_blocks_after_erase(nand: MT29F4G08ABADAWP):
     TOTAL_BLOCKS = 4096
     PAGES_PER_BLOCK = 64
     
-    print("\n=== 삭제 후 Bad Block 스캔 시작 ===")
+    print("\n.=== 삭제 후 Bad Block 스캔 시작 ===")
     new_bad_blocks = []
     MAX_RETRIES = 3
     
@@ -365,7 +365,7 @@ def erase_and_verify_blocks_two_plane(nand: MT29F4G08ABADAWP, verification_level
         nand.bad_blocks = set()
         
         start_datetime = datetime.now()
-        print(f"\n=== Two-Plane 기능을 사용한 모든 블록 강제 삭제 및 검증 시작 ===")
+        print(f"\n.=== Two-Plane 기능을 사용한 모든 블록 강제 삭제 및 검증 시작 ===")
         print(f"시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
         
         # --- 1단계: 블록 삭제 ---
@@ -404,7 +404,7 @@ def erase_and_verify_blocks_two_plane(nand: MT29F4G08ABADAWP, verification_level
         print("\n\n1단계 (삭제) 완료. 소요 시간:", erase_end_time - start_datetime)
 
         # --- 2단계: 검증 ---
-        print(f"\n=== 2단계: 삭제 결과 기반 Bad Block 판단 및 검증 시작 ===")
+        print(f"\n.=== 2단계: 삭제 결과 기반 Bad Block 판단 및 검증 시작 ===")
         print(f"검증 방식: {verification_info[verification_level]}")
         scan_start_time = datetime.now()
 
