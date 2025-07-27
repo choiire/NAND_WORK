@@ -13,6 +13,12 @@ class MT29F4G08ABADAWP:
     tR = 25000  # Data Transfer from Cell to Register
     tRR = 20    # RE# low to RE# high
     tWC = 25    # Write Cycle Time
+    tWP = 10    # WE# pulse width
+    tWH = 10    # WE# high hold time
+    tADL = 70   # ALE to data loading time
+    tREA = 20   # RE# access time
+    tREH = 10   # RE# high hold time
+    tWHR = 60   # WE# high to RE# low
     
     def __init__(self, skip_bad_block_scan=False):
         # GPIO 핀 설정
@@ -56,10 +62,21 @@ class MT29F4G08ABADAWP:
             
             # 파워온 시퀀스
             self.power_on_sequence()
+
+            # 내부 ECC 엔진 활성화
+            self.enable_internal_ecc()
             
         except Exception as e:
             GPIO.cleanup()
             raise RuntimeError(f"GPIO 초기화 실패: {str(e)}")
+
+    def _delay_ns(self, nanoseconds: int):
+        """나노초 단위의 정밀한 시간 지연을 수행합니다 (비지 웨이트)."""
+        if nanoseconds <= 0:
+            return
+        end_time = time.perf_counter_ns() + nanoseconds
+        while time.perf_counter_ns() < end_time:
+            pass
             
     def reset_pins(self):
         """핀 상태를 안전한 기본값으로 리셋"""
@@ -75,7 +92,7 @@ class MT29F4G08ABADAWP:
                 GPIO.setup(pin, GPIO.OUT)
                 GPIO.output(pin, GPIO.HIGH)
                 
-            time.sleep(0.0001)  # 100us 대기
+            self._delay_ns(100)  # 100ns 대기
         except Exception as e:
             raise RuntimeError(f"핀 리셋 실패: {str(e)}")
             
@@ -160,7 +177,7 @@ class MT29F4G08ABADAWP:
     def wait_ready(self):
         """R/B# 핀이 Ready(HIGH) 상태가 될 때까지 대기"""
         # tWB 대기
-        time.sleep(self.tWB / 1_000_000_000)  # 100ns
+        self._delay_ns(self.tWB)  # 100ns
         
         # R/B# 신호가 HIGH가 될 때까지 대기
         retry_count = 0
@@ -186,40 +203,40 @@ class MT29F4G08ABADAWP:
         """데이터 핀을 출력 모드로 설정"""
         for pin in self.IO_pins:
             GPIO.setup(pin, GPIO.OUT)
-        time.sleep(0.00001)  # 10us 대기
+        self._delay_ns(100)  # 100ns 대기
             
     def set_data_pins_input(self):
         """데이터 핀을 입력 모드로 설정"""
         for pin in self.IO_pins:
             GPIO.setup(pin, GPIO.IN)
-        time.sleep(0.00001)  # 10us 대기
+        self._delay_ns(100)  # 100ns 대기
             
     def write_data(self, data):
         """8비트 데이터 쓰기 (타이밍 제어 추가)"""
         # WE# 사이클 타임 준수
-        cycle_start = time.time_ns()
+        cycle_start = time.perf_counter_ns()
         
         for i in range(8):
             GPIO.output(self.IO_pins[i], (data >> i) & 1)
             
         # tWC 타이밍 준수
-        elapsed = time.time_ns() - cycle_start
+        elapsed = time.perf_counter_ns() - cycle_start
         if elapsed < self.tWC:
-            time.sleep((self.tWC - elapsed) / 1_000_000_000)
+            self._delay_ns(self.tWC - elapsed)
 
     def read_data(self):
         """8비트 데이터 읽기 (타이밍 제어 추가)"""
         # RE# 사이클 타임 준수
-        cycle_start = time.time_ns()
+        cycle_start = time.perf_counter_ns()
         
         data = 0
         for i in range(8):
             data |= GPIO.input(self.IO_pins[i]) << i
             
         # tRR 타이밍 준수
-        elapsed = time.time_ns() - cycle_start
+        elapsed = time.perf_counter_ns() - cycle_start
         if elapsed < self.tRR:
-            time.sleep((self.tRR - elapsed) / 1_000_000_000)
+            self._delay_ns(self.tRR - elapsed)
             
         return data
         
@@ -238,84 +255,49 @@ class MT29F4G08ABADAWP:
     def write_address(self, addr):
         """주소 쓰기"""
         GPIO.output(self.CE, GPIO.LOW)   # Chip Enable
-        time.sleep(0.00001)  # 10us 대기
+        self._delay_ns(100)  # 100ns 대기
         
         GPIO.output(self.CLE, GPIO.LOW)  # Command Latch Disable
         GPIO.output(self.ALE, GPIO.HIGH) # Address Latch Enable
-        time.sleep(0.00001)  # 10us 대기
+        self._delay_ns(100)  # 100ns 대기
         
         GPIO.output(self.WE, GPIO.LOW)   # Write Enable
         self.write_data(addr)
         GPIO.output(self.WE, GPIO.HIGH)  # Write Disable
-        time.sleep(0.00001)  # 10us 대기
+        self._delay_ns(self.tWH)  # WE# high hold time
         
         GPIO.output(self.ALE, GPIO.LOW)  # Address Latch Disable
-        time.sleep(0.00001)  # 10us 대기
-        
-    def hamming_encode(self, data):
-        """해밍 코드로 데이터 인코딩"""
-        def calculate_parity(data, position):
-            parity = 0
-            for i in range(len(data)):
-                if i & position:
-                    parity ^= data[i]
-            return parity
+        self._delay_ns(100)  # 100ns 대기
 
-        # 데이터 비트 수에 따른 패리티 비트 수 계산
-        m = len(data)
-        r = 1
-        while (1 << r) < (m + r + 1):
-            r += 1
+    def enable_internal_ecc(self):
+        """데이터시트 사양에 따라 칩의 내장 ECC 엔진을 활성화합니다."""
+        try:
+            print("내부 ECC 엔진 활성화 시도...")
+            # SET FEATURES (EFh) 명령
+            self.write_command(0xEF)
 
-        # 인코딩된 데이터 준비
-        encoded = [0] * (m + r)
-        j = 0  # 원본 데이터 인덱스
-        
-        # 데이터와 패리티 비트 위치 설정
-        for i in range(1, m + r + 1):
-            if i & (i - 1):  # i가 2의 거듭제곱이 아닌 경우
-                encoded[i-1] = data[j]
-                j += 1
+            # Feature Address (90h)
+            self.write_address(0x90) # write_address를 사용하면 ALE 신호 제어가 용이
 
-        # 패리티 비트 계산
-        for i in range(r):
-            pos = 1 << i
-            encoded[pos-1] = calculate_parity(encoded, pos)
+            # Parameters (P1=08h, P2-P4=00h)
+            params = [0x08, 0x00, 0x00, 0x00]
+            GPIO.output(self.CE, GPIO.LOW)
+            GPIO.output(self.CLE, GPIO.LOW)
+            GPIO.output(self.ALE, GPIO.LOW)
 
-        return encoded
-
-    def hamming_decode(self, encoded):
-        """해밍 코드로 데이터 디코딩 및 오류 검출/수정"""
-        # 패리티 비트 수 계산
-        r = 1
-        while (1 << r) < len(encoded):
-            r += 1
-
-        # 신드롬 계산
-        syndrome = 0
-        for i in range(r):
-            pos = 1 << i
-            parity = 0
-            for j in range(len(encoded)):
-                if j & pos:
-                    parity ^= encoded[j]
-            if parity:
-                syndrome |= pos
-
-        # 오류 검출 및 수정
-        if syndrome:
-            if syndrome <= len(encoded):
-                encoded[syndrome-1] ^= 1  # 오류 비트 수정
-            else:
-                raise RuntimeError("수정 불가능한 오류 발견")
-
-        # 원본 데이터 추출
-        data = []
-        for i in range(1, len(encoded) + 1):
-            if i & (i - 1):  # i가 2의 거듭제곱이 아닌 경우
-                data.append(encoded[i-1])
-
-        return data
+            for p in params:
+                GPIO.output(self.WE, GPIO.LOW)
+                self._delay_ns(12) # tWP
+                self.write_data(p)
+                GPIO.output(self.WE, GPIO.HIGH)
+                self._delay_ns(10) # tWH
+            
+            self.wait_ready() # tFEAT 대기 (최대 1us)
+            print("내부 ECC 엔진이 성공적으로 활성화되었습니다.")
+        except Exception as e:
+            raise RuntimeError(f"내부 ECC 활성화 실패: {str(e)}")
+        finally:
+            self.reset_pins()
 
     def is_bad_block(self, block_no):
         """해당 블록이 Bad Block인지 확인"""
@@ -326,53 +308,65 @@ class MT29F4G08ABADAWP:
         self.bad_blocks.add(block_no)
         
     def scan_bad_blocks(self):
-        """전체 NAND를 스캔하여 Bad Block 테이블 구성"""
-        print("Bad Block 스캔 시작...")
-        MAX_RETRIES = 3  # 최대 재시도 횟수
+        """
+        전체 NAND를 스캔하여 데이터시트 사양에 맞는 Bad Block 테이블을 구성합니다.
+        공장 출하 시 Bad Block은 첫 페이지의 스페어 영역 첫 바이트(2048)에 0x00으로 표시됩니다.
+        """
+        print("Bad Block 스캔 시작 (데이터시트 기준)...")
+        self.bad_blocks = set()
         
+        # 스페어 영역의 첫 바이트 주소
+        BAD_BLOCK_MARKER_ADDR = 2048
+
         try:
             for block in range(self.TOTAL_BLOCKS):
-                page = block * self.PAGES_PER_BLOCK
-                retry_count = 0
-                block_scan_success = False
-                
-                # 진행 상황 표시 (100블록마다)
                 if block % 100 == 0:
                     print(f"Bad Block 스캔 진행 중: {block}/{self.TOTAL_BLOCKS} 블록 완료")
+
+                first_page_of_block = block * self.PAGES_PER_BLOCK
                 
                 try:
-                    # 첫 페이지와 마지막 페이지의 첫 바이트 확인
-                    try:
-                        first_page = self.read_page(page, 1)
-                        first_byte = first_page[0] if first_page else 0x00
-                    except Exception as e:
-                        print(f"첫 페이지 읽기 실패 (블록 {block}): {str(e)}")
-                        first_byte = 0x00  # 오류 발생 시 Bad Block으로 처리하기 위해
+                    # [1] 읽기 명령 (00h)
+                    self.write_command(0x00)
                     
-                    try:
-                        last_page = self.read_page(page + self.PAGES_PER_BLOCK - 1, 1)
-                        last_byte = last_page[0] if last_page else 0x00
-                    except Exception as e:
-                        print(f"마지막 페이지 읽기 실패 (블록 {block}): {str(e)}")
-                        last_byte = 0x00  # 오류 발생 시 Bad Block으로 처리하기 위해
+                    # [2] 주소 전송 (스페어 영역의 첫 바이트)
+                    self._write_full_address(first_page_of_block, col_addr=BAD_BLOCK_MARKER_ADDR)
                     
-                    # 첫 바이트가 0xFF가 아니면 Bad Block
-                    if first_byte != 0xFF or last_byte != 0xFF:
-                        self.mark_bad_block(block)
-                        print(f"Bad Block 발견: 블록 {block} (첫 페이지: 0x{first_byte:02X}, 마지막 페이지: 0x{last_byte:02X})")
+                    # [3] 읽기 확정 (30h)
+                    self.write_command(0x30)
                     
+                    # [4] 데이터 전송 대기
+                    self.wait_ready()
+                    
+                    # [5] 1바이트 읽기
+                    self.set_data_pins_input()
+                    GPIO.output(self.CE, GPIO.LOW)
+                    
+                    GPIO.output(self.RE, GPIO.LOW)
+                    self._delay_ns(22) # tREA (22ns)
+                    marker_byte = self.read_data()
+                    GPIO.output(self.RE, GPIO.HIGH)
+                    
+                    GPIO.output(self.CE, GPIO.HIGH)
+                    self.set_data_pins_output()
+
+                    # [6] Bad Block 마크(0x00) 확인
+                    if marker_byte == 0x00:
+                        self.bad_blocks.add(block)
+                        print(f"Bad Block 발견: 블록 {block}")
+
                 except Exception as e:
-                    print(f"블록 {block} 스캔 중 오류 발생: {str(e)}")
-                    # 안전을 위해 스캔에 실패한 블록은 Bad Block으로 표시
-                    self.mark_bad_block(block)
-            
+                    print(f"블록 {block} 스캔 중 오류 발생, Bad Block으로 처리합니다: {str(e)}")
+                    self.bad_blocks.add(block)
+                finally:
+                    self.reset_pins() # 각 블록 스캔 후 핀 상태 리셋
+
             print(f"Bad Block 스캔 완료. 총 {len(self.bad_blocks)}개의 Bad Block 발견.")
             if self.bad_blocks:
                 print("Bad Block 목록:", sorted(list(self.bad_blocks)))
                 
         except Exception as e:
             print(f"Bad Block 스캔 중 심각한 오류 발생: {str(e)}")
-            print("스캔을 중단하고 계속 진행합니다.")
 
     def find_good_block(self, start_block):
         """주어진 블록부터 시작하여 사용 가능한 블록 찾기"""
@@ -384,307 +378,359 @@ class MT29F4G08ABADAWP:
         raise RuntimeError("사용 가능한 블록이 없습니다")
 
     def write_page(self, page_no: int, data: bytes):
-        """한 페이지 쓰기 (ECC 적용) - 데이터시트 사양 준수"""
+        """한 페이지 쓰기 (내장 하드웨어 ECC 사용)"""
+        # 데이터 크기 유효성 검사 (페이지 크기만 확인)
+        if len(data) > self.PAGE_SIZE:
+            raise ValueError(f"데이터 크기가 페이지 크기({self.PAGE_SIZE} bytes)를 초과합니다.")
+        
+        # 페이지 크기에 맞게 데이터 패딩
+        if len(data) < self.PAGE_SIZE:
+            data += b'\xFF' * (self.PAGE_SIZE - len(data))
+
         try:
             self.validate_page(page_no)
             block_no = page_no // self.PAGES_PER_BLOCK
-            
-            # Bad Block 체크
             if self.is_bad_block(block_no):
-                new_block = self.find_good_block(block_no + 1)
-                page_no = new_block * self.PAGES_PER_BLOCK + (page_no % self.PAGES_PER_BLOCK)
-                
-            # ECC 생성 및 데이터 준비
-            encoded_data = []
-            for i in range(0, len(data), 256):  # 256바이트 단위로 ECC 생성
-                chunk = data[i:i+256]
-                if len(chunk) < 256:  # 패딩
-                    chunk = chunk + b'\xFF' * (256 - len(chunk))
-                encoded = self.hamming_encode(list(chunk))
-                encoded_data.extend(encoded)
-            
-            # 데이터시트 PROGRAM PAGE (80h-10h) 시퀀스
-            self.set_data_pins_output()
+                raise RuntimeError(f"Bad Block({block_no})에 쓰기 시도")
             
             # [1] 쓰기 시작 명령 (80h)
             self.write_command(0x80)
             
-            # [2] 주소 전송 (5사이클) - 데이터시트 순서 준수
+            # [2] 주소 전송 (5 사이클)
+            self._write_full_address(page_no, col_addr=0)
+            
+            # [3] 데이터 전송 (인코딩 없이 원본 데이터 전송)
+            self.set_data_pins_output()
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
-            GPIO.output(self.ALE, GPIO.HIGH)
-            
-            # 1~2번째 바이트: 컬럼 주소 (페이지 내 시작 위치)
-            # 컬럼 주소 하위 바이트
-            GPIO.output(self.WE, GPIO.LOW)
-            time.sleep(0.00001)  # tWP (WE# pulse width): 10ns 최소
-            self.write_data(0x00)
-            time.sleep(0.00001)
-            GPIO.output(self.WE, GPIO.HIGH)
-            time.sleep(0.00001)  # tWH (WE# high hold time)
-            
-            # 컬럼 주소 상위 바이트  
-            GPIO.output(self.WE, GPIO.LOW)
-            time.sleep(0.00001)
-            self.write_data(0x00)
-            time.sleep(0.00001)
-            GPIO.output(self.WE, GPIO.HIGH)
-            time.sleep(0.00001)
-            
-            # 3~5번째 바이트: 로우 주소 (블록 및 페이지)
-            for i in range(3):
-                GPIO.output(self.WE, GPIO.LOW)
-                time.sleep(0.00001)
-                self.write_data((page_no >> (8 * i)) & 0xFF)
-                time.sleep(0.00001)
-                GPIO.output(self.WE, GPIO.HIGH)
-                time.sleep(0.00001)
-                
-            GPIO.output(self.ALE, GPIO.LOW)
-            time.sleep(0.0001)  # tADL (ALE to data loading time): 100ns
-            
-            # [3] 데이터 전송
-            GPIO.output(self.CLE, GPIO.LOW)
             GPIO.output(self.ALE, GPIO.LOW)
             
-            # 인코딩된 데이터 쓰기
-            for byte in encoded_data:
+            for byte in data:
                 GPIO.output(self.WE, GPIO.LOW)
-                time.sleep(0.00001)  # tWP
+                self._delay_ns(12) # tWP
                 self.write_data(byte)
-                time.sleep(0.00001)
                 GPIO.output(self.WE, GPIO.HIGH)
-                time.sleep(0.00001)  # tWH
+                self._delay_ns(10) # tWH
                 
             # [4] 쓰기 확정 명령 (10h)
             self.write_command(0x10)
             
-            # [5] tPROG 대기 (최대 600µs)
-            time.sleep(0.0006)  # 600µs 대기
+            # [5] tPROG_ECC 대기
             self.wait_ready()
             
             # [6] 상태 확인
             if not self.check_operation_status():
                 self.mark_bad_block(block_no)
-                raise RuntimeError("페이지 쓰기 실패")
+                raise RuntimeError("페이지 쓰기 실패 (상태 확인)")
                 
         except Exception as e:
-            self.reset_pins()
             raise RuntimeError(f"페이지 쓰기 실패 (페이지 {page_no}): {str(e)}")
         finally:
-            self.set_data_pins_output()
-
-    def read_page(self, page_no: int, length: int = 2048):
-        """한 페이지 읽기 (ECC 적용) - 데이터시트 사양 준수"""
-        try:
-            self.validate_page(page_no)
-            block_no = page_no // self.PAGES_PER_BLOCK
-            
-            # Bad Block 체크
-            if self.is_bad_block(block_no):
-                raise RuntimeError(f"Bad Block 접근 시도: 블록 {block_no}")
-            
-            # 데이터시트 READ PAGE (00h-30h) 시퀀스
-            # [1] 읽기 시작 명령 (00h)
-            self.write_command(0x00)
-            
-            # [2] 주소 전송 (5사이클) - 데이터시트 순서 준수
-            GPIO.output(self.CE, GPIO.LOW)
-            GPIO.output(self.CLE, GPIO.LOW)
-            GPIO.output(self.ALE, GPIO.HIGH)
-            
-            # 1~2번째 바이트: 컬럼 주소
-            GPIO.output(self.WE, GPIO.LOW)
-            time.sleep(0.00001)
-            self.write_data(0x00)
-            time.sleep(0.00001)
-            GPIO.output(self.WE, GPIO.HIGH)
-            time.sleep(0.00001)
-            
-            GPIO.output(self.WE, GPIO.LOW)
-            time.sleep(0.00001)
-            self.write_data(0x00)
-            time.sleep(0.00001)
-            GPIO.output(self.WE, GPIO.HIGH)
-            time.sleep(0.00001)
-            
-            # 3~5번째 바이트: 로우 주소
-            for i in range(3):
-                GPIO.output(self.WE, GPIO.LOW)
-                time.sleep(0.00001)
-                self.write_data((page_no >> (8 * i)) & 0xFF)
-                time.sleep(0.00001)
-                GPIO.output(self.WE, GPIO.HIGH)
-                time.sleep(0.00001)
-                
-            GPIO.output(self.ALE, GPIO.LOW)
-            time.sleep(0.0001)  # tADL
-            
-            # [3] 읽기 확정 명령 (30h)
-            self.write_command(0x30)
-            
-            # [4] tR 대기 (최대 25µs)
-            time.sleep(0.000025)  # 25µs 대기
-            self.wait_ready()
-            
-            # [5] 데이터 읽기 준비
-            self.set_data_pins_input()
-            GPIO.output(self.CLE, GPIO.LOW)
-            GPIO.output(self.ALE, GPIO.LOW)
-            
-            # 첫 바이트만 읽을 경우 ECC 없이 직접 읽기
-            if length == 1:
-                # RE# 토글: HIGH -> LOW -> HIGH (데이터시트 사양)
-                GPIO.output(self.RE, GPIO.HIGH)  # 초기 상태 확인
-                time.sleep(0.00001)
-                GPIO.output(self.RE, GPIO.LOW)   # LOW로 토글 (데이터 출력)
-                time.sleep(0.00001)              # tREA (RE# access time)
-                byte = self.read_data()          # 데이터 읽기
-                time.sleep(0.00001)
-                GPIO.output(self.RE, GPIO.HIGH)  # HIGH로 복원
-                return bytes([byte])
-            
-            # [6] 전체 페이지 데이터 읽기
-            encoded_data = []
-            total_bytes = length + (length // 256) * 32  # ECC 오버헤드 포함
-            
-            for _ in range(total_bytes):
-                # RE# 토글 시퀀스 (데이터시트 사양)
-                GPIO.output(self.RE, GPIO.HIGH)  # 시작 상태
-                time.sleep(0.00001)              # tRHZ (RE# high to output hi-z)
-                GPIO.output(self.RE, GPIO.LOW)   # LOW로 토글
-                time.sleep(0.00001)              # tREA (RE# access time) 
-                byte = self.read_data()          # 데이터 읽기
-                time.sleep(0.00001)              # tRH (RE# high hold time)
-                GPIO.output(self.RE, GPIO.HIGH)  # HIGH로 복원
-                time.sleep(0.00001)              # tRHZ
-                encoded_data.append(byte)
-            
-            # ECC 디코딩 및 오류 수정
-            decoded_data = []
-            for i in range(0, len(encoded_data), 288):  # 256 + 32 (ECC)
-                chunk = encoded_data[i:i+288]
-                if len(chunk) == 288:
-                    try:
-                        decoded = self.hamming_decode(chunk)
-                        decoded_data.extend(decoded[:256])
-                    except RuntimeError as e:
-                        print(f"ECC 오류 발생 (페이지 {page_no}, 오프셋 {i}): {str(e)}")
-                        decoded_data.extend([0xFF] * 256)  # 오류 발생 시 0xFF로 채움
-            
-            return bytes(decoded_data[:length])
-            
-        except Exception as e:
             self.reset_pins()
-            raise RuntimeError(f"페이지 읽기 실패 (페이지 {page_no}): {str(e)}")
-        finally:
-            self.set_data_pins_output()
-    
-    def _write_row_address(self, page_no: int):
-        """블록 지우기/읽기/쓰기에 사용되는 3바이트 Row Address를 전송합니다."""
+
+    def _write_full_address(self, page_no: int, col_addr: int = 0):
+        """
+        데이터시트(Table 2) 사양에 맞게 5바이트 전체 주소(컬럼+로우)를 조합하여 전송합니다.
+        """
+        # 주소 계산
+        page_in_block = page_no % self.PAGES_PER_BLOCK  # PA[5:0] (0-63)
+        block_no = page_no // self.PAGES_PER_BLOCK      # BA[11:0] (0-4095 for 4Gb)
+
+        # 데이터시트의 5-Cycle Address 규격에 맞춰 5바이트 주소 생성
+        # Cycle 1: Column Address Lower Byte (CA[7:0])
+        addr_byte1 = col_addr & 0xFF
+        
+        # Cycle 2: Column Address Upper Byte (CA[11:8])
+        # 페이지 크기가 2112(2048+64)이므로 컬럼 주소는 12비트(0-2111)가 필요합니다.
+        addr_byte2 = (col_addr >> 8) & 0x0F
+        
+        # Cycle 3: {BA[7], BA[6], PA[5], PA[4], PA[3], PA[2], PA[1], PA[0]}
+        addr_byte3 = (block_no & 0xC0) | page_in_block
+        
+        # Cycle 4: {BA[15], BA[14], BA[13], BA[12], BA[11], BA[10], BA[9], BA[8]}
+        addr_byte4 = (block_no >> 8) & 0xFF
+        
+        # Cycle 5: {LOW, ..., LOW, BA[17], BA[16]}
+        addr_byte5 = (block_no >> 16) & 0xFF
+
+        addresses = [addr_byte1, addr_byte2, addr_byte3, addr_byte4, addr_byte5]
+
+        # 생성된 5바이트 주소 전송
         GPIO.output(self.CE, GPIO.LOW)
         GPIO.output(self.CLE, GPIO.LOW)
         GPIO.output(self.ALE, GPIO.HIGH)
-        
-        # Row Address (3바이트) 전송
-        # 데이터시트에 따르면 페이지 주소(PA)와 블록 주소(BA)가 포함됩니다.
-        # erase_block의 경우 블록 주소만 유효합니다.
-        row_address = page_no 
-        for i in range(3):
+        self._delay_ns(10) # tALS (ALE setup time)
+
+        for addr_byte in addresses:
             GPIO.output(self.WE, GPIO.LOW)
-            time.sleep(0.00002)
-            # 3-cycle 주소 입력. 페이지 번호에서 로우 주소를 계산합니다.
-            self.write_data((row_address >> (8 * i)) & 0xFF)
-            time.sleep(0.00002)
+            self._delay_ns(12) # tWP (WE# Pulse Width)
+            self.write_data(addr_byte)
             GPIO.output(self.WE, GPIO.HIGH)
-            time.sleep(0.00002)
+            self._delay_ns(10) # tWH (WE# High Hold Time)
             
         GPIO.output(self.ALE, GPIO.LOW)
-        time.sleep(0.0002) # tADL
-    
-    def erase_block(self, page_no: int):
-        """블록 단위 erase
+        self._delay_ns(70) # tADL (ALE to Data Loading time)
+
+    def _read_data_from_bus(self, length: int) -> bytes:
+        """
+        RE#를 토글하여 버스에서 데이터를 읽고 ECC 디코딩을 수행합니다.
+        이 함수를 호출하기 전에 핀이 입력으로 설정되어야 합니다.
+        """
+        # ECC 오버헤드를 포함한 전체 읽기 바이트 수 계산 (코드는 Hamming 예시)
+        # 실제 칩의 ECC 방식에 따라 계산이 달라져야 합니다.
+        # 예시 코드가 Hamming(288, 256)을 사용하므로 그에 맞춰 계산합니다.
+        num_chunks = (length + 255) // 256
+        total_bytes_to_read = num_chunks * 288 
         
-        타이밍:
-        - tWB (WE# high to R/B# low): 100ns
-        - tBERS (Block Erase Time): ~3.5ms (최대 10ms까지 가능)
-        - tRST (Device Reset Time): 5us ~ 500us
+        encoded_data = []
+        for _ in range(total_bytes_to_read):
+            GPIO.output(self.RE, GPIO.LOW)
+            self._delay_ns(self.tREA)  # RE# access time
+            byte = self.read_data()
+            GPIO.output(self.RE, GPIO.HIGH)
+            self._delay_ns(self.tREH)  # RE# high hold time
+            encoded_data.append(byte)
+        
+        # ECC 디코딩 (기존 코드의 로직 활용)
+        decoded_data = []
+        for i in range(0, len(encoded_data), 288):
+            chunk = encoded_data[i:i+288]
+            if len(chunk) == 288:
+                try:
+                    decoded = self.hamming_decode(chunk)
+                    decoded_data.extend(decoded)
+                except RuntimeError: # 수정 불가능한 오류
+                    # 오류 발생 시 해당 청크를 0xFF로 채웁니다.
+                    decoded_data.extend([0xFF] * 256)
+        
+        return bytes(decoded_data[:length])
+
+    def read_page(self, page_no: int, length: int = 2048):
+        """한 페이지 읽기 (내장 하드웨어 ECC 사용)"""
+        try:
+            self.validate_page(page_no)
+            if self.is_bad_block(page_no // self.PAGES_PER_BLOCK):
+                raise RuntimeError(f"Bad Block({page_no // self.PAGES_PER_BLOCK}) 읽기 시도")
+            
+            # [1] 읽기 명령 및 주소 전송 (00h)
+            self.write_command(0x00)
+            self._write_full_address(page_no, col_addr=0)
+            
+            # [2] 읽기 확정 명령 (30h)
+            self.write_command(0x30)
+            
+            # [3] 데이터가 캐시로 로드될 때까지 대기 (tR_ECC)
+            self.wait_ready()
+            
+            # [4] ECC 처리 결과 확인 (중요!)
+            status = self.check_read_status() # 아래에 추가할 새 함수
+            if status == "UNCORRECTABLE_ERROR":
+                print(f"경고: 페이지 {page_no}에서 수정 불가능한 ECC 오류 발생!")
+                # 수정 불가능한 경우, FF로 채워진 데이터를 반환하거나 예외 발생
+                return b'\xFF' * length
+            elif status == "CORRECTED_WITH_REWRITE_RECOMMENDED":
+                print(f"정보: 페이지 {page_no}에서 ECC 오류가 수정되었으나, 해당 블록을 재기록(refresh)하는 것을 권장합니다.")
+
+            # [5] (오류 수정된) 데이터 읽기
+            self.set_data_pins_input()
+            GPIO.output(self.CE, GPIO.LOW)
+            
+            read_bytes = []
+            for _ in range(length): # 스페어 영역 제외하고 메인 데이터만 읽기
+                GPIO.output(self.RE, GPIO.LOW)
+                self._delay_ns(22) # tREA
+                byte = self.read_data()
+                GPIO.output(self.RE, GPIO.HIGH)
+                self._delay_ns(10) # tREH
+                read_bytes.append(byte)
+                
+            return bytes(read_bytes)
+            
+        except Exception as e:
+            raise RuntimeError(f"페이지 읽기 실패 (페이지 {page_no}): {str(e)}")
+        finally:
+            self.reset_pins()
+
+    def check_read_status(self) -> str:
+        """읽기 동작 후 ECC 상태를 확인합니다."""
+        self.write_command(0x70)  # Read Status
+        status_byte = self.read_data()
+        
+        # READ MODE(00h)로 다시 전환하여 데이터 출력을 활성화해야 함
+        self.write_command(0x00)
+
+        if status_byte & 0x01:  # Bit 0 (FAIL): Uncorrectable error
+            return "UNCORRECTABLE_ERROR"
+        if status_byte & 0x08:  # Bit 3 (Rewrite recommended)
+            return "CORRECTED_WITH_REWRITE_RECOMMENDED"
+            
+        return "SUCCESS"
+    
+    def read_page_two_plane(self, page_no1: int, page_no2: int, length: int = 2048) -> (bytes, bytes):
+        """
+        서로 다른 플레인에 있는 두 페이지를 동시에 읽어옵니다.
+
+        요구 조건:
+        - 두 블록은 서로 다른 플레인에 있어야 합니다. (블록 번호의 6번째 비트가 달라야 함)
+        - 두 주소의 페이지 오프셋(PA[5:0]) 및 컬럼 주소는 동일해야 합니다.
         """
         try:
+            # 1. 주소 및 요구 조건 유효성 검사
+            self.validate_page(page_no1)
+            self.validate_page(page_no2)
+            block_no1 = page_no1 // self.PAGES_PER_BLOCK
+            block_no2 = page_no2 // self.PAGES_PER_BLOCK
+
+            if ((block_no1 >> 6) & 1) == ((block_no2 >> 6) & 1):
+                raise ValueError("두 블록이 동일한 플레인에 있습니다.")
+            if (page_no1 % self.PAGES_PER_BLOCK) != (page_no2 % self.PAGES_PER_BLOCK):
+                raise ValueError("두 주소의 페이지 오프셋이 다릅니다.")
+            if self.is_bad_block(block_no1) or self.is_bad_block(block_no2):
+                raise RuntimeError(f"Bad Block 접근 시도: 블록 {block_no1} 또는 {block_no2}")
+
+            # --- Two-Plane Read 시퀀스 시작 (00h-Addr1-00h-Addr2-30h) ---
+            
+            # [1] 첫 번째 플레인 주소 설정
+            self.write_command(0x00)
+            self._write_full_address(page_no1)
+            
+            # [2] 두 번째 플레인 주소 설정
+            self.write_command(0x00)
+            self._write_full_address(page_no2)
+
+            # [3] 동시 읽기 시작 명령
+            self.write_command(0x30)
+            
+            # [4] 두 페이지 데이터가 캐시로 로드될 때까지 대기 (tR)
+            self.wait_ready()
+            
+            # --- 데이터 버스에서 순차적으로 읽기 ---
+            self.set_data_pins_input()
+            
+            # [5] 마지막에 주소를 입력한 page_no2의 데이터를 먼저 읽음
+            GPIO.output(self.CE, GPIO.LOW)
+            # data2 = self._read_data_from_bus(length) # <- 이 부분을 아래 코드로 대체
+            read_bytes_2 = []
+            for _ in range(length):
+                GPIO.output(self.RE, GPIO.LOW)
+                self._delay_ns(22) # tREA
+                byte = self.read_data()
+                GPIO.output(self.RE, GPIO.HIGH)
+                self._delay_ns(10) # tREH
+                read_bytes_2.append(byte)
+            data2 = bytes(read_bytes_2)
+            GPIO.output(self.CE, GPIO.HIGH)
+
+            # [6] RANDOM DATA READ TWO-PLANE(06h-E0h) 명령으로 읽을 플레인을 page_no1로 변경
+            self.write_command(0x06)
+            self._write_full_address(page_no1)
+            self.write_command(0xE0)
+            self._delay_ns(self.tWHR)  # WE# high to RE# low
+
+            # [7] page_no1의 데이터를 읽음
+            GPIO.output(self.CE, GPIO.LOW)
+            # data1 = self._read_data_from_bus(length) # <- 이 부분을 아래 코드로 대체
+            read_bytes_1 = []
+            for _ in range(length):
+                GPIO.output(self.RE, GPIO.LOW)
+                self._delay_ns(22) # tREA
+                byte = self.read_data()
+                GPIO.output(self.RE, GPIO.HIGH)
+                self._delay_ns(10) # tREH
+                read_bytes_1.append(byte)
+            data1 = bytes(read_bytes_1)
+            GPIO.output(self.CE, GPIO.HIGH)
+
+            return data1, data2
+
+        except Exception as e:
+            self.reset_pins()
+            raise RuntimeError(f"Two-plane 페이지 읽기 실패 ({page_no1}, {page_no2}): {str(e)}")
+        finally:
+            self.set_data_pins_output()
+            
+    def _write_row_address(self, page_no: int):
+        """
+        데이터시트(Table 2) 사양에 맞게 3바이트 Row Address를 조합하여 전송합니다.
+        Erase 동작에서는 PA(페이지 주소) 비트들이 무시됩니다.
+        """
+        # 페이지 번호로부터 페이지 주소(PA)와 블록 주소(BA) 계산
+        page_in_block = page_no % self.PAGES_PER_BLOCK  # PA[5:0] (0-63)
+        block_no = page_no // self.PAGES_PER_BLOCK      # BA[11:0] (0-4095)
+
+        # 데이터시트의 Third, Fourth, Fifth address cycle에 맞춰 3바이트 주소 생성
+        # Cycle 3: {BA[7], BA[6], PA[5], PA[4], PA[3], PA[2], PA[1], PA[0]}
+        addr_byte3 = (block_no & 0xC0) | (page_in_block & 0x3F)
+
+        # Cycle 4: {BA[15], BA[14], BA[13], BA[12], BA[11], BA[10], BA[9], BA[8]}
+        # 4Gb 칩은 BA[11:0]만 사용하므로 상위 비트는 0이 됩니다.
+        addr_byte4 = (block_no >> 8) & 0xFF
+
+        # Cycle 5: {LOW, LOW, LOW, LOW, LOW, LOW, BA[17], BA[16]}
+        # 4Gb 칩은 BA[17:16]을 사용하지 않으므로 이 바이트는 0입니다.
+        addr_byte5 = (block_no >> 16) & 0xFF
+
+        row_addresses = [addr_byte3, addr_byte4, addr_byte5]
+
+        # 생성된 주소 전송
+        GPIO.output(self.CE, GPIO.LOW)
+        GPIO.output(self.CLE, GPIO.LOW)
+        GPIO.output(self.ALE, GPIO.HIGH)
+        self._delay_ns(10) # tALS
+
+        for addr_byte in row_addresses:
+            GPIO.output(self.WE, GPIO.LOW)
+            self._delay_ns(12) # tWP
+            self.write_data(addr_byte)
+            GPIO.output(self.WE, GPIO.HIGH)
+            self._delay_ns(10) # tWH
+            
+        GPIO.output(self.ALE, GPIO.LOW)
+        self._delay_ns(70) # tADL
+    
+    def erase_block(self, page_no: int):
+        """
+        한 개의 블록을 지웁니다. (수정된 버전)
+        내부적으로 wait_ready()를 사용하여 작업 완료를 기다립니다.
+        """
+        try:
+            # 1. 페이지 및 블록 번호 유효성 검사
             self.validate_page(page_no)
             block_no = page_no // self.PAGES_PER_BLOCK
             self.validate_block(block_no)
             
-            # Block Erase 커맨드 (0x60)
+            # 2. 이미 알려진 Bad Block 지우기 시도 방지
+            if self.is_bad_block(block_no):
+                raise RuntimeError(f"Bad Block({block_no})에 지우기 시도")
+
+            # --- Block Erase 시퀀스 시작 (60h-Addr-D0h) ---
+            
+            # [1] 지우기 시작 명령 (60h)
             self.write_command(0x60)
 
-            # Row Address (3바이트) - 헬퍼 함수 사용
+            # [2] Row Address 전송 (3 사이클)
             self._write_row_address(page_no)
 
-            # Confirm (0xD0)
+            # [3] 지우기 확정 명령 (D0h)
             self.write_command(0xD0)
             
-            # tWB 대기
-            time.sleep(0.00015)
-
-            # Ready 대기 (tBERS) - 더 긴 타임아웃
-            timeout_start = time.time()
-            initial_rb_state = GPIO.input(self.RB)
+            # [4] 작업이 완료될 때까지 대기 (tBERS)
+            self.wait_ready()
             
-            # R/B# 신호가 LOW로 변하기를 기다림 (삭제 시작 확인)
-            rb_went_low = False
-            while time.time() - timeout_start < 0.005:  # 5ms 내에 LOW로 변해야 함
-                if GPIO.input(self.RB) == GPIO.LOW:
-                    rb_went_low = True
-                    break
-                time.sleep(0.0001)  # 100us 간격으로 체크
-            
-            if not rb_went_low:
-                print(f"경고: 블록 {block_no} R/B# 신호가 LOW로 변하지 않음 (초기 상태: {initial_rb_state})")
-            
-            # R/B# 신호가 HIGH로 돌아올 때까지 대기 (삭제 완료)
-            timeout_start = time.time()
-            while GPIO.input(self.RB) == GPIO.LOW:
-                if time.time() - timeout_start > 0.020:  # 20ms로 타임아웃 증가 (기존 10ms)
-                    # 타임아웃 시 더 강력한 리셋
-                    print(f"블록 {block_no} 삭제 타임아웃 발생, 강력한 리셋 시도...")
-                    self.write_command(0xFF)  # Reset command
-                    time.sleep(0.001)  # 1ms 대기 (기존 5us에서 증가)
-                    self.wait_ready()
-                    raise RuntimeError(f"블록 삭제 타임아웃 (20ms 초과)")
-                time.sleep(0.0002)  # 200us 간격으로 체크 (더 자주 체크)
-            
-            # 추가 안정화 대기
-            time.sleep(0.001)  # 1ms 추가 대기
-            
-            # 상태 확인 (여러 번 시도)
-            status_check_success = False
-            for status_retry in range(3):
-                try:
-                    status = self.check_operation_status()
-                    if status:
-                        status_check_success = True
-                        break
-                    else:
-                        time.sleep(0.001)  # 1ms 대기 후 재시도
-                except Exception as e:
-                    if status_retry == 2:  # 마지막 시도
-                        raise e
-                    time.sleep(0.001)
-            
-            if not status_check_success:
-                raise RuntimeError("블록 삭제 상태 확인 실패")
+            # [5] 작업 상태 확인
+            if not self.check_operation_status():
+                # 지우기 실패 시, 해당 블록을 Bad Block으로 처리
+                self.mark_bad_block(block_no)
+                raise RuntimeError("블록 지우기 실패 (상태 확인)")
                 
         except Exception as e:
-            raise RuntimeError(f"블록 삭제 실패 (블록 {page_no // self.PAGES_PER_BLOCK}): {str(e)}")
+            # 실패 시 블록 번호를 포함하여 예외 발생
+            block_no_for_error = page_no // self.PAGES_PER_BLOCK if 'page_no' in locals() else 'N/A'
+            raise RuntimeError(f"블록 지우기 실패 (블록 {block_no_for_error}): {str(e)}")
         
         finally:
-            # 항상 안전한 상태로 복원
-            try:
-                self.reset_pins()
-                time.sleep(0.002)  # 2ms 대기 (더 길게)
-            except:
-                pass 
+            # 작업 성공/실패와 관계없이 핀 상태를 안전하게 복원
+            self.reset_pins()
     
     def erase_block_two_plane(self, page_no1: int, page_no2: int):
         """
@@ -720,7 +766,7 @@ class MT29F4G08ABADAWP:
             self.write_command(0xD1) # 첫 번째 플레인 확정
             
             # tDBSY 대기 (Busy for Two-Plane Operation). 데이터시트 상 최대 1us.
-            time.sleep(0.00001) # 10us로 여유있게 대기
+            self._delay_ns(1000) # 1us 대기
             self.wait_ready() # 실제로는 R/B# 신호를 확인하는 것이 더 정확
 
             # [Plane 2] 두 번째 블록 주소 전송 및 동시 실행
