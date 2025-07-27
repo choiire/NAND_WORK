@@ -471,40 +471,6 @@ class MT29F4G08ABADAWP:
         GPIO.output(self.ALE, GPIO.LOW)
         self._delay_ns(70) # tADL (ALE to Data Loading time)
 
-    def _read_data_from_bus(self, length: int) -> bytes:
-        """
-        RE#를 토글하여 버스에서 데이터를 읽고 ECC 디코딩을 수행합니다.
-        이 함수를 호출하기 전에 핀이 입력으로 설정되어야 합니다.
-        """
-        # ECC 오버헤드를 포함한 전체 읽기 바이트 수 계산 (코드는 Hamming 예시)
-        # 실제 칩의 ECC 방식에 따라 계산이 달라져야 합니다.
-        # 예시 코드가 Hamming(288, 256)을 사용하므로 그에 맞춰 계산합니다.
-        num_chunks = (length + 255) // 256
-        total_bytes_to_read = num_chunks * 288 
-        
-        encoded_data = []
-        for _ in range(total_bytes_to_read):
-            GPIO.output(self.RE, GPIO.LOW)
-            self._delay_ns(self.tREA)  # RE# access time
-            byte = self.read_data()
-            GPIO.output(self.RE, GPIO.HIGH)
-            self._delay_ns(self.tREH)  # RE# high hold time
-            encoded_data.append(byte)
-        
-        # ECC 디코딩 (기존 코드의 로직 활용)
-        decoded_data = []
-        for i in range(0, len(encoded_data), 288):
-            chunk = encoded_data[i:i+288]
-            if len(chunk) == 288:
-                try:
-                    decoded = self.hamming_decode(chunk)
-                    decoded_data.extend(decoded)
-                except RuntimeError: # 수정 불가능한 오류
-                    # 오류 발생 시 해당 청크를 0xFF로 채웁니다.
-                    decoded_data.extend([0xFF] * 256)
-        
-        return bytes(decoded_data[:length])
-
     def read_page(self, page_no: int, length: int = 2048):
         """한 페이지 읽기 (내장 하드웨어 ECC 사용)"""
         try:
@@ -607,39 +573,33 @@ class MT29F4G08ABADAWP:
             # --- 데이터 버스에서 순차적으로 읽기 ---
             self.set_data_pins_input()
             
-            # [5] 마지막에 주소를 입력한 page_no2의 데이터를 먼저 읽음
-            GPIO.output(self.CE, GPIO.LOW)
-            # data2 = self._read_data_from_bus(length) # <- 이 부분을 아래 코드로 대체
-            read_bytes_2 = []
-            for _ in range(length):
-                GPIO.output(self.RE, GPIO.LOW)
-                self._delay_ns(22) # tREA
-                byte = self.read_data()
-                GPIO.output(self.RE, GPIO.HIGH)
-                self._delay_ns(10) # tREH
-                read_bytes_2.append(byte)
-            data2 = bytes(read_bytes_2)
-            GPIO.output(self.CE, GPIO.HIGH)
+            # [5] page_no2의 ECC 상태 확인 및 데이터 읽기
+            status2 = self.check_read_status()
+            if status2 == "UNCORRECTABLE_ERROR":
+                print(f"경고: 페이지 {page_no2}에서 수정 불가능한 ECC 오류 발생!")
+                data2 = b'\xFF' * length
+            else:
+                GPIO.output(self.CE, GPIO.LOW)
+                read_bytes_2 = [self.read_data() for _ in range(length)]
+                data2 = bytes(read_bytes_2)
+                GPIO.output(self.CE, GPIO.HIGH)
 
-            # [6] RANDOM DATA READ TWO-PLANE(06h-E0h) 명령으로 읽을 플레인을 page_no1로 변경
+            # [6] 플레인 변경 (RANDOM DATA READ TWO-PLANE)
             self.write_command(0x06)
             self._write_full_address(page_no1)
             self.write_command(0xE0)
-            self._delay_ns(self.tWHR)  # WE# high to RE# low
+            self._delay_ns(self.tWHR)
 
-            # [7] page_no1의 데이터를 읽음
-            GPIO.output(self.CE, GPIO.LOW)
-            # data1 = self._read_data_from_bus(length) # <- 이 부분을 아래 코드로 대체
-            read_bytes_1 = []
-            for _ in range(length):
-                GPIO.output(self.RE, GPIO.LOW)
-                self._delay_ns(22) # tREA
-                byte = self.read_data()
-                GPIO.output(self.RE, GPIO.HIGH)
-                self._delay_ns(10) # tREH
-                read_bytes_1.append(byte)
-            data1 = bytes(read_bytes_1)
-            GPIO.output(self.CE, GPIO.HIGH)
+            # [7] page_no1의 ECC 상태 확인 및 데이터 읽기
+            status1 = self.check_read_status()
+            if status1 == "UNCORRECTABLE_ERROR":
+                print(f"경고: 페이지 {page_no1}에서 수정 불가능한 ECC 오류 발생!")
+                data1 = b'\xFF' * length
+            else:
+                GPIO.output(self.CE, GPIO.LOW)
+                read_bytes_1 = [self.read_data() for _ in range(length)]
+                data1 = bytes(read_bytes_1)
+                GPIO.output(self.CE, GPIO.HIGH)
 
             return data1, data2
 
