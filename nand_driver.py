@@ -25,6 +25,12 @@ class MT29F4G08ABADAWP:
     tALS = 20     # ALE setup time (데이터시트 Min 10ns -> 20ns)
     tALH = 10     # ALE hold time (데이터시트 Min 5ns -> 10ns)
     
+    # 새로 추가된/조정된 타이밍 상수
+    # tDS (Data setup time): 데이터시트 3.3V Min 7ns, 1.8V Min 10ns. 여유롭게 20ns. 
+    tDS = 20      
+    # tDH (Data hold time): 데이터시트 3.3V Min 5ns, 1.8V Min 5ns. 여유롭게 10ns. 
+    tDH = 10
+
     def __init__(self, skip_bad_block_scan=False):
         # GPIO 핀 설정
         self.RB = 13  # Ready/Busy
@@ -258,7 +264,9 @@ class MT29F4G08ABADAWP:
             GPIO.output(self.IO_pins[i], (data >> i) & 1)
             
         # 데이터 설정 후 안정화 대기
-        self._delay_ns(50)  # 추가된 안정화 대기
+        #self._delay_ns(50)  # 추가된 안정화 대기
+        # 데이터 설정 후 안정화 대기 (tDS: Data setup time 확보)
+        self._delay_ns(self.tDS) # 
         
         # tWC 타이밍 준수
         elapsed = time.perf_counter_ns() - cycle_start
