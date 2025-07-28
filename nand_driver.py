@@ -262,6 +262,7 @@ class MT29F4G08ABADAWP:
         # 데이터 설정
         for i in range(8):
             GPIO.output(self.IO_pins[i], (data >> i) & 1)
+            self._delay_ns(1)
             
         # 데이터 설정 후 안정화 대기
         #self._delay_ns(50)  # 추가된 안정화 대기
