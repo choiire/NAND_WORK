@@ -322,30 +322,32 @@ class MT29F4G08ABADAWP:
         self._delay_ns(self.tALH)  # ALE hold time
         self._delay_ns(self.tADL)  # ALE to data loading time
 
+    
     def enable_internal_ecc(self):
-        """데이터시트 사양에 따라 칩의 내장 ECC 엔진을 활성화합니다."""
+        """데이터시트 사양에 따라 칩의 내장 ECC 엔진을 활성화하고 상태를 검증합니다."""
         try:
             print("내부 ECC 엔진 활성화 시도...")
-            # SET FEATURES (EFh) 명령
+            
+            # [1] SET FEATURES (EFh) 명령
             self.write_command(0xEF)
 
-            # Feature Address (90h) 전송
+            # [2] Feature Address (90h) 전송
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
             GPIO.output(self.ALE, GPIO.HIGH)
-            self._delay_ns(self.tALS) # ALE setup time
+            self._delay_ns(self.tALS)
 
             GPIO.output(self.WE, GPIO.LOW)
-            self._delay_ns(self.tWP) # WE# pulse width
-            self.write_data(0x90) # Feature Address
+            self._delay_ns(self.tWP)
+            self.write_data(0x90)  # Feature Address
             GPIO.output(self.WE, GPIO.HIGH)
-            self._delay_ns(self.tWH) # WE# high hold time
+            self._delay_ns(self.tWH)
             
             GPIO.output(self.ALE, GPIO.LOW)
-            self._delay_ns(self.tALH) # ALE hold time
-            self._delay_ns(self.tADL) # Address to Data Latch Delay
+            self._delay_ns(self.tALH)
+            self._delay_ns(self.tADL)
 
-            # Parameters (P1=08h for ECC Enable, P2-P4=00h) 전송
+            # [3] Parameters (P1=08h for ECC Enable, P2-P4=00h) 전송
             params = [0x08, 0x00, 0x00, 0x00]
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
@@ -353,16 +355,61 @@ class MT29F4G08ABADAWP:
 
             for p in params:
                 GPIO.output(self.WE, GPIO.LOW)
-                self._delay_ns(self.tWP) # WE# pulse width
+                self._delay_ns(self.tWP)
                 self.write_data(p)
                 GPIO.output(self.WE, GPIO.HIGH)
-                self._delay_ns(self.tWH) # WE# high hold time
+                self._delay_ns(self.tWH)
             
-            self.wait_ready() # tFEAT (Feature operation time) 대기
-            print("내부 ECC 엔진이 성공적으로 활성화되었습니다.")
+            # [4] tFEAT 대기
+            self.wait_ready()
+            time.sleep(0.001)
+            
+            # [5] ECC 상태 검증 - GET FEATURES로 확인
+            print("ECC 활성화 상태를 검증합니다...")
+            
+            # GET FEATURES (EEh) 명령
+            self.write_command(0xEE)
+            
+            # Feature Address (90h)
+            self.write_address(0x90)
+            
+            # tFEAT 대기
+            self._delay_ns(2000)  # 2us 대기
+            
+            # 4바이트 파라미터 읽기
+            self.set_data_pins_input()
+            GPIO.output(self.CE, GPIO.LOW)
+            
+            params_read = []
+            for _ in range(4):
+                GPIO.output(self.RE, GPIO.LOW)
+                self._delay_ns(self.tREA)
+                byte_data = self.read_data()
+                GPIO.output(self.RE, GPIO.HIGH)
+                self._delay_ns(self.tREH)
+                params_read.append(byte_data)
+            
+            GPIO.output(self.CE, GPIO.HIGH)
+            
+            # [6] P1 파라미터 검증
+            p1_value = params_read[0]
+            
+            if p1_value == 0x08:
+                print("✓ 내부 ECC 엔진이 성공적으로 활성화되었습니다.")
+                print(f"  검증 결과: P1=0x{p1_value:02X} (ECC Enabled)")
+                return True
+            elif p1_value == 0x00:
+                print("✗ 내부 ECC 엔진 활성화에 실패했습니다.")
+                print(f"  검증 결과: P1=0x{p1_value:02X} (ECC Still Disabled)")
+                return False
+            else:
+                print(f"⚠ 예상하지 못한 P1 값: 0x{p1_value:02X}")
+                print("  ECC 상태를 정확히 판단할 수 없습니다.")
+                return False
 
         except Exception as e:
-            raise RuntimeError(f"내부 ECC 활성화 실패: {str(e)}")
+            print(f"✗ 내부 ECC 활성화 중 오류 발생: {str(e)}")
+            return False
         finally:
             self.reset_pins()
     
@@ -388,13 +435,60 @@ class MT29F4G08ABADAWP:
                 self.write_data(p)
                 GPIO.output(self.WE, GPIO.HIGH)
                 self._delay_ns(self.tWH)
+            # [4] tFEAT 시간 대기 (기능 설정 완료까지)
+            self.wait_ready()
+            time.sleep(0.001)  # 명령이 완전히 처리될 시간을 보장
             
-            self.wait_ready() # tFEAT 시간 대기
-            time.sleep(0.001) # 명령이 완전히 처리될 시간을 보장
-            print("내부 ECC 엔진이 성공적으로 비활성화되었습니다.")
+            # [5] ECC 상태 검증 - GET FEATURES로 확인
+            print("ECC 비활성화 상태를 검증합니다...")
+            
+            # GET FEATURES (EEh) 명령
+            self.write_command(0xEE)
+            
+            # Feature Address (90h for Array operation mode)
+            self.write_address(0x90)
+            
+            # tFEAT 대기 (칩이 파라미터를 준비하는 시간)
+            self._delay_ns(2000)  # 2us 대기
+            
+            # 4바이트 파라미터(P1-P4) 읽기
+            self.set_data_pins_input()
+            GPIO.output(self.CE, GPIO.LOW)
+            
+            params_read = []
+            for _ in range(4):
+                GPIO.output(self.RE, GPIO.LOW)
+                self._delay_ns(self.tREA)
+                byte_data = self.read_data()
+                GPIO.output(self.RE, GPIO.HIGH)
+                self._delay_ns(self.tREH)
+                params_read.append(byte_data)
+            
+            GPIO.output(self.CE, GPIO.HIGH)
+            
+            # [6] P1 파라미터 검증
+            p1_value = params_read[0]
+            
+            if p1_value == 0x00:
+                print("✓ 내부 ECC 엔진이 성공적으로 비활성화되었습니다.")
+                print(f"  검증 결과: P1=0x{p1_value:02X} (ECC Disabled)")
+                return True
+            elif p1_value == 0x08:
+                print("✗ 내부 ECC 엔진 비활성화에 실패했습니다.")
+                print(f"  검증 결과: P1=0x{p1_value:02X} (ECC Still Enabled)")
+                return False
+            else:
+                print(f"⚠ 예상하지 못한 P1 값: 0x{p1_value:02X}")
+                print("  ECC 상태를 정확히 판단할 수 없습니다.")
+                return False
+            #self.wait_ready() # tFEAT 시간 대기
+            #time.sleep(0.001) # 명령이 완전히 처리될 시간을 보장
+            #print("내부 ECC 엔진이 성공적으로 비활성화되었습니다.")
 
         except Exception as e:
-            raise RuntimeError(f"내부 ECC 비활성화 실패: {str(e)}")
+            #raise RuntimeError(f"내부 ECC 비활성화 실패: {str(e)}")
+            print(f"✗ 내부 ECC 비활성화 중 오류 발생: {str(e)}")
+            return False
         finally:
             self.reset_pins()
 

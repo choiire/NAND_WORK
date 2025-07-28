@@ -208,7 +208,13 @@ def program_nand(initialize_blocks: bool = False):
     try:
         print("NAND 플래시 드라이버 초기화 중...")
         nand = MT29F4G08ABADAWP()
-        
+        # ECC 비활성화 및 상태 검증
+        print("\n내부 ECC 엔진 설정을 확인합니다...")
+        ecc_disabled = nand.disable_internal_ecc()
+        if not ecc_disabled:
+            print("경고: ECC 비활성화에 실패했습니다. 프로그래밍을 계속하지만 예상치 못한 동작이 발생할 수 있습니다.")
+        nand.check_ecc_status()
+
         # 전체 블록 초기화 옵션
         if initialize_blocks:
             print("\n전체 블록 초기화를 시작합니다...")
@@ -218,8 +224,6 @@ def program_nand(initialize_blocks: bool = False):
             else:
                 print("전체 블록 초기화가 성공적으로 완료되었습니다.")
         
-        nand.check_ecc_status()
-
         splits_dir = "output_splits"
         validate_directory(splits_dir)
         
