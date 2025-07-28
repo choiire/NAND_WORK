@@ -222,7 +222,7 @@ class MT29F4G08ABADAWP:
         while retry_count < max_retries:
             timeout_start = time.time()
             while GPIO.input(self.RB) == GPIO.LOW:
-                if (time.time() - timeout_start) * 1000 > timeout_ms:
+                if time.time() - timeout_start > 0.02:
                     break
                 time.sleep(0.0001)
                 
@@ -968,7 +968,7 @@ class MT29F4G08ABADAWP:
     
     def check_ecc_status(self):
         """GET FEATURES(EEh) 명령을 사용해 칩의 현재 ECC 설정 상태를 읽고 출력합니다."""
-        print("-" * 20)
+        print(".-" * 20)
         print("칩의 현재 ECC 상태를 확인합니다...")
         try:
             # GET FEATURES (EEh) 명령
@@ -976,8 +976,7 @@ class MT29F4G08ABADAWP:
             # Feature Address (90h for Array operation mode)
             self.write_address(0x90)
 
-            # 칩이 준비될 때까지 대기 (tFEAT)
-            self.wait_ready(timeout_ms=1) 
+            self._delay_ns(2000)  # 2us 대기 (안정성을 위해 2배)
 
             # 결과 파라미터 읽기
             self.set_data_pins_input()
