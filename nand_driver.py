@@ -765,3 +765,58 @@ class MT29F4G08ABADAWP:
         finally:
             self.reset_pins()
             time.sleep(0.002)
+
+    def write_full_page(self, page_no: int, data: bytes):
+        """
+        한 페이지 전체(메인+스페어, 2112 바이트)를 씁니다.
+        데이터가 2112 바이트보다 작으면 나머지는 0xFF로 채웁니다.
+        """
+        # 전체 페이지 크기 (2112 바이트) 유효성 검사
+        full_page_size = self.PAGE_SIZE + self.SPARE_SIZE
+        if len(data) > full_page_size:
+            raise ValueError(f"데이터 크기가 전체 페이지 크기({full_page_size} bytes)를 초과합니다.")
+        
+        # 데이터가 전체 페이지 크기보다 작을 경우 0xFF로 패딩
+        if len(data) < full_page_size:
+            data += b'\xFF' * (full_page_size - len(data))
+
+        try:
+            self.validate_page(page_no)
+            block_no = page_no // self.PAGES_PER_BLOCK
+            if self.is_bad_block(block_no):
+                raise RuntimeError(f"Bad Block({block_no})에 쓰기 시도")
+            
+            # [1] 쓰기 시작 명령 (80h)
+            self.write_command(0x80)
+            
+            # [2] 주소 전송 (5 사이클)
+            self._write_full_address(page_no, col_addr=0)
+            
+            # [3] 데이터 전송
+            self.set_data_pins_output()
+            GPIO.output(self.CE, GPIO.LOW)
+            GPIO.output(self.CLE, GPIO.LOW)
+            GPIO.output(self.ALE, GPIO.LOW)
+            
+            for byte in data:
+                GPIO.output(self.WE, GPIO.LOW)
+                self._delay_ns(12) # tWP
+                self.write_data(byte)
+                GPIO.output(self.WE, GPIO.HIGH)
+                self._delay_ns(10) # tWH
+                
+            # [4] 쓰기 확정 명령 (10h)
+            self.write_command(0x10)
+            
+            # [5] tPROG_ECC 대기
+            self.wait_ready()
+            
+            # [6] 상태 확인
+            if not self.check_operation_status():
+                # self.mark_bad_block(block_no) # Bad block 없다고 가정하므로 주석 처리하거나 제거
+                raise RuntimeError("페이지 쓰기 실패 (상태 확인)")
+                
+        except Exception as e:
+            raise RuntimeError(f"페이지 쓰기 실패 (페이지 {page_no}): {str(e)}")
+        finally:
+            self.reset_pins()
