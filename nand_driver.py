@@ -67,8 +67,6 @@ class MT29F4G08ABADAWP:
             # 파워온 시퀀스
             self.power_on_sequence()
 
-            # 내부 ECC 엔진 활성화
-            #self.enable_internal_ecc()
             self.disable_internal_ecc()
             
         except Exception as e:
