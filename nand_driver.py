@@ -222,9 +222,9 @@ class MT29F4G08ABADAWP:
         while retry_count < max_retries:
             timeout_start = time.time()
             while GPIO.input(self.RB) == GPIO.LOW:
-                if time.time() - timeout_start > 0.02:  # 10ms -> 20ms 타임아웃 연장
+                if (time.time() - timeout_start) * 1000 > timeout_ms:
                     break
-                time.sleep(0.0001)  # 100us 간격으로 체크
+                time.sleep(0.0001)
                 
             if GPIO.input(self.RB) == GPIO.HIGH:
                 # 추가 안정화 대기
