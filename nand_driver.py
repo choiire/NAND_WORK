@@ -826,19 +826,9 @@ class MT29F4G08ABADAWP:
                 self.write_data(byte)
                 GPIO.output(self.WE, GPIO.HIGH)
                 self._delay_ns(10) # tWH
-            
-            print("      -> 4. 데이터 전송 완료")
-            
-            # [4] 쓰기 확정 명령 (10h)
-            print("      -> 5. 쓰기 확정 명령(10h) 전송 (이제 칩이 Busy 상태로 전환됩니다)")
             self.write_command(0x10)
             
-            # [5] 프로그래밍 완료 대기
             self.wait_ready()
-            print("      -> 6. 칩 Ready 상태 확인 (작업 완료)")
-            
-            # [6] 상태 확인
-            print("      -> 7. 최종 상태 레지스터 확인")
             if not self.check_operation_status():
                 raise RuntimeError("페이지 쓰기 실패 (상태 확인)")
                 
