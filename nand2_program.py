@@ -275,10 +275,18 @@ def program_nand(initialize_blocks: bool = False):
                         chunk_data = file_data[chunk_start : chunk_start + FULL_PAGE_SIZE]
                         current_page_no = start_page_no + page_offset
                         
+                         # --- ✨ 변경된 부분 시작 ✨ ---
+                        # 항상 2112바이트 크기의 버퍼를 생성하고 0xFF로 초기화
+                        full_page_buffer = bytearray([0xFF] * FULL_PAGE_SIZE)
+                        
+                        # 파일 데이터(chunk_data)를 버퍼의 앞부분에 복사
+                        full_page_buffer[:len(chunk_data)] = chunk_data
+                        # --- ✨ 변경된 부분 끝 ✨ ---
+                        
                         batch_pages_to_write.append({
                             'filename': filename,
                             'page_no': current_page_no,
-                            'data': chunk_data,
+                            'data': bytes(full_page_buffer), # <--- 항상 2112바이트 버퍼를 전달
                         })
                 except Exception as e:
                     failed_files_info.append({'file': filename, 'reason': f"파일 준비 중 오류: {e}"})
