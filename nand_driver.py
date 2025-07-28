@@ -12,13 +12,13 @@ class MT29F4G08ABADAWP:
     # 라즈베리 파이 Python GPIO 제어의 비결정성(non-determinism)을 감안하여 더 큰 값으로 설정
     tWB = 200*100     # WE# high to R/B# low (데이터시트 Max 100ns -> 200ns)
     tR_ECC = 70000*100  # Data Transfer from Cell to Register (데이터시트 Max 70us -> 70000ns)
-    tRR = 50*100      # RE# low to RE# high (데이터시트 Min 20ns -> 50ns, Read Cycle Time tRC Min 20ns 고려)
+    tRR = 60*100      # Read Cycle Time tRC (데이터시트 Min 20ns -> 60ns, 풀업/풀다운 고려)
     tWC = 50*100      # Write Cycle Time (데이터시트 Min 20ns -> 50ns)
     tWP = 20*100      # WE# pulse width (데이터시트 Min 10ns -> 20ns)
     tWH = 20*100      # WE# high hold time (데이터시트 Min 7ns -> 20ns)
     tADL = 100*100    # ALE to data loading time (데이터시트 Min 70ns -> 100ns)
-    tREA = 30*100     # RE# access time (데이터시트 Max 16ns -> 30ns)
-    tREH = 20*100     # RE# high hold time (데이터시트 Min 7ns -> 20ns)
+    tREA = 40*100     # RE# access time (데이터시트 Max 16ns -> 40ns, 신호 안정성 고려)
+    tREH = 30*100     # RE# high hold time (데이터시트 Min 7ns -> 30ns, 풀업/풀다운 고려)
     tWHR = 100*100    # WE# high to RE# low (데이터시트 Min 60ns -> 100ns)
     tCLS = 20*100     # CLE setup time (데이터시트 Min 10ns -> 20ns)
     tCLH = 10*100     # CLE hold time (데이터시트 Min 5ns -> 10ns)
@@ -275,21 +275,14 @@ class MT29F4G08ABADAWP:
             self._delay_ns(self.tWC - elapsed)
 
     def read_data(self):
-        """8비트 데이터 읽기 (타이밍 제어 강화)"""
-        # RE# 사이클 타임 준수
-        cycle_start = time.perf_counter_ns()
-        
-        # 데이터 읽기 전 안정화 대기
-        self._delay_ns(50)  # 추가된 안정화 대기
+        """8비트 데이터 읽기 (RE# 사이클 없이 순수 GPIO 읽기)"""
+        # RE# 사이클은 상위 함수에서 처리됨
+        # 여기서는 GPIO 핀 상태만 읽음
+        self._delay_ns(self.tREA)  # RE# access time 대기
         
         data = 0
         for i in range(8):
             data |= GPIO.input(self.IO_pins[i]) << i
-            
-        # tRR 타이밍 준수
-        elapsed = time.perf_counter_ns() - cycle_start
-        if elapsed < self.tRR:
-            self._delay_ns(self.tRR - elapsed)
             
         return data
         
@@ -713,17 +706,26 @@ class MT29F4G08ABADAWP:
             
             read_bytes = []
             for i in range(length):
+                # 올바른 RE# 사이클 타이밍 구현
+                cycle_start = time.perf_counter_ns()
+                
+                # RE# LOW (읽기 시작)
                 GPIO.output(self.RE, GPIO.LOW)
-                self._delay_ns(self.tREA)  # RE# access time
+                self._delay_ns(self.tREA)  # RE# access time 대기
+                
+                # 데이터 읽기 (RE# LOW 상태에서)
                 byte_data = self.read_data()
+                
+                # RE# HIGH (읽기 완료)
                 GPIO.output(self.RE, GPIO.HIGH)
                 self._delay_ns(self.tREH)  # RE# high hold time
+                
                 read_bytes.append(byte_data)
                 
-                # 매 256바이트마다 짧은 대기 (안정성 향상)
-                #if (i + 1) % 256 == 0:
-                #    self._delay_ns(1000)  # 1us 대기
-                self._delay_ns(50)
+                # tRC (Read Cycle Time) 준수
+                elapsed = time.perf_counter_ns() - cycle_start
+                if elapsed < self.tRR:  # tRR은 실제로 tRC와 같음
+                    self._delay_ns(self.tRR - elapsed)
 
             GPIO.output(self.CE, GPIO.HIGH)
             # 읽기 후에는 finally 블록에서 출력 모드로 자동 복원됨
