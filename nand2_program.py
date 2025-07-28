@@ -6,6 +6,7 @@ import time
 
 # --- 새로운 상수 정의 ---
 FULL_PAGE_SIZE = MT29F4G08ABADAWP.PAGE_SIZE + MT29F4G08ABADAWP.SPARE_SIZE # 2112 바이트
+PAGE_SIZE = MT29F4G08ABADAWP.PAGE_SIZE
 
 def hex_to_int(hex_str: str) -> int:
     """16진수 문자열을 정수로 변환"""
@@ -156,9 +157,7 @@ def program_page_only(nand, page_no: int, write_data: bytes, max_retries: int = 
 
 def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict:
     """
-    배치로 페이지들을 검증합니다.
-    데이터 불일치 시, 상세한 디버깅 정보를 포함하여 오류를 발생시킵니다.
-    (수정: Main 데이터 영역만 비교)
+    배치로 페이지들을 검증합니다. (수정: Main 데이터 영역만 비교)
     """
     results = {'success': [], 'failed': []}
     for page_info in page_data_list:
@@ -168,17 +167,15 @@ def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict
         for retry in range(max_retries):
             try:
                 read_data = nand.read_page(page_no, len(original_data))
-
-                # ✨ 핵심 수정: 전체 데이터 대신 Main 영역(앞 2048 바이트)만 비교
+                
+                # 핵심 수정: 전체 데이터 대신 Main 영역(앞 2048 바이트)만 비교
                 original_main_data = original_data[:PAGE_SIZE]
                 read_main_data = read_data[:PAGE_SIZE]
 
                 if read_main_data != original_main_data:
                     mismatches = []
-                    # 데이터가 짧게 읽혔을 경우를 대비해 짧은 길이를 기준으로 비교
                     compare_len = min(len(original_main_data), len(read_main_data))
                     
-                    # ✨ 불일치 검사도 Main 영역 길이만큼만 수행
                     for i in range(compare_len):
                         written_byte = original_main_data[i]
                         read_byte = read_main_data[i]
@@ -186,17 +183,14 @@ def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict
                             mismatches.append(
                                 f"  - 오프셋 0x{i:04X}: 쓰기=0x{written_byte:02X}, 읽기=0x{read_byte:02X}"
                             )
-                            if len(mismatches) >= 16: # 최대 16개까지만 표시
+                            if len(mismatches) >= 16:
                                 mismatches.append("  - ... (불일치 다수)")
                                 break
                     
                     error_details = "\n".join(mismatches)
-                    
                     len_info = f"데이터 길이: 쓰기={len(original_main_data)}, 읽기={len(read_main_data)}"
-                    
                     raise ValueError(f"데이터 검증 실패:\n{len_info}\n불일치 내역:\n{error_details}")
                 
-                # 검증 성공
                 results['success'].append(page_info)
                 break
                 
