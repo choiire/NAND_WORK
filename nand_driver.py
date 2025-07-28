@@ -127,46 +127,13 @@ class MT29F4G08ABADAWP:
             raise ValueError("데이터가 비어있습니다")
 
     def check_operation_status(self):
-        """작업 상태를 확인하고, 상세한 상태 값을 출력합니다."""
-        try:
-            self.write_command(0x70)  # Read Status
+        """작업 상태 확인"""
+        self.write_command(0x70)  # Read Status
+        status = self.read_data()
+        if status & 0x01:  # Fail bit
+            raise RuntimeError("작업 실패")
+        return True
 
-            self.set_data_pins_input()
-            GPIO.output(self.CE, GPIO.LOW)
-            
-            GPIO.output(self.RE, GPIO.LOW)
-            self._delay_ns(self.tREA)
-            status = self.read_data()
-            GPIO.output(self.RE, GPIO.HIGH)
-            
-            GPIO.output(self.CE, GPIO.HIGH)
-            
-            # --- 변경된 부분: 상태 값을 항상 출력 ---
-            print(f"상태 레지스터: 0x{status:02X}")
-            
-            # Bit 7 (WP): 0=Protected, 1=Not Protected
-            if not (status & 0x80):
-                # 이 오류가 발생하면 WP# 핀이 LOW(GND)에 연결된 것입니다.
-                raise RuntimeError(f"쓰기 실패: 장치가 쓰기 금지(Write Protected) 상태입니다! (상태=0x{status:02X})")
-
-            # Bit 6 (RDY): 0=Busy, 1=Ready
-            if not (status & 0x40):
-                # wait_ready() 함수가 통과했다면 이 오류는 거의 발생하지 않습니다.
-                raise RuntimeError(f"상태 오류: 장치가 아직 Ready 상태가 아닙니다. (상태=0x{status:02X})")
-                
-            # Bit 0 (FAIL): 0=Pass, 1=Fail  
-            if status & 0x01:
-                raise RuntimeError(f"작업 실패: FAIL 비트가 설정되었습니다. (상태=0x{status:02X})")
-                
-            return True
-            
-        except Exception as e:
-            # 이미 RuntimeError로 상세 메시지를 보냈으므로 그대로 다시 발생시킴
-            raise e
-        finally:
-            # 함수 종료 시 핀 상태를 항상 출력으로 복원
-            self.set_data_pins_output()
-    
     def power_on_sequence(self):
         """파워온 시퀀스 수행"""
         try:
@@ -799,33 +766,32 @@ class MT29F4G08ABADAWP:
             self.reset_pins()
             time.sleep(0.002)
 
+    # nand_driver.py 파일
     def write_full_page(self, page_no: int, data: bytes):
         """
-        한 페이지 전체(메인+스페어, 2112 바이트)를 씁니다.
-        데이터가 2112 바이트보다 작으면 나머지는 0xFF로 채웁니다.
+        한 페이지 전체를 쓰며, 각 단계를 상세히 출력합니다.
         """
-        # 전체 페이지 크기 (2112 바이트) 유효성 검사
         full_page_size = self.PAGE_SIZE + self.SPARE_SIZE
         if len(data) > full_page_size:
             raise ValueError(f"데이터 크기가 전체 페이지 크기({full_page_size} bytes)를 초과합니다.")
         
-        # 데이터가 전체 페이지 크기보다 작을 경우 0xFF로 패딩
         if len(data) < full_page_size:
             data += b'\xFF' * (full_page_size - len(data))
 
         try:
             self.validate_page(page_no)
-            block_no = page_no // self.PAGES_PER_BLOCK
-            if self.is_bad_block(block_no):
-                raise RuntimeError(f"Bad Block({block_no})에 쓰기 시도")
+            print(f"    [쓰기 시작] Page {page_no}")
             
             # [1] 쓰기 시작 명령 (80h)
+            print("      -> 1. 쓰기 시작 명령(80h) 전송")
             self.write_command(0x80)
             
             # [2] 주소 전송 (5 사이클)
+            print("      -> 2. 주소 5바이트 전송")
             self._write_full_address(page_no, col_addr=0)
             
             # [3] 데이터 전송
+            print(f"      -> 3. 데이터 {len(data)}바이트 전송 시작")
             self.set_data_pins_output()
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
@@ -837,16 +803,20 @@ class MT29F4G08ABADAWP:
                 self.write_data(byte)
                 GPIO.output(self.WE, GPIO.HIGH)
                 self._delay_ns(10) # tWH
-                
+            
+            print("      -> 4. 데이터 전송 완료")
+            
             # [4] 쓰기 확정 명령 (10h)
+            print("      -> 5. 쓰기 확정 명령(10h) 전송 (이제 칩이 Busy 상태로 전환됩니다)")
             self.write_command(0x10)
             
-            # [5] tPROG_ECC 대기
+            # [5] 프로그래밍 완료 대기
             self.wait_ready()
+            print("      -> 6. 칩 Ready 상태 확인 (작업 완료)")
             
             # [6] 상태 확인
+            print("      -> 7. 최종 상태 레지스터 확인")
             if not self.check_operation_status():
-                # self.mark_bad_block(block_no) # Bad block 없다고 가정하므로 주석 처리하거나 제거
                 raise RuntimeError("페이지 쓰기 실패 (상태 확인)")
                 
         except Exception as e:
