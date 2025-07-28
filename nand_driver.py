@@ -142,7 +142,7 @@ class MT29F4G08ABADAWP:
             GPIO.output(self.RE, GPIO.HIGH)
             
             GPIO.output(self.CE, GPIO.HIGH)
-            
+            self.set_data_pins_output()
             if status & 0x01:  # Bit 0 (FAIL)
                 raise RuntimeError(f"작업 실패 (상태 레지스터: 0x{status:02X})")
                 
