@@ -127,13 +127,46 @@ class MT29F4G08ABADAWP:
             raise ValueError("데이터가 비어있습니다")
 
     def check_operation_status(self):
-        """작업 상태 확인"""
+    """작업 상태를 확인하고, 상세한 상태 값을 출력합니다."""
+    try:
         self.write_command(0x70)  # Read Status
-        status = self.read_data()
-        if status & 0x01:  # Fail bit
-            raise RuntimeError("작업 실패")
-        return True
 
+        self.set_data_pins_input()
+        GPIO.output(self.CE, GPIO.LOW)
+        
+        GPIO.output(self.RE, GPIO.LOW)
+        self._delay_ns(self.tREA)
+        status = self.read_data()
+        GPIO.output(self.RE, GPIO.HIGH)
+        
+        GPIO.output(self.CE, GPIO.HIGH)
+        
+        # --- 변경된 부분: 상태 값을 항상 출력 ---
+        print(f"상태 레지스터: 0x{status:02X}")
+        
+        # Bit 7 (WP): 0=Protected, 1=Not Protected
+        if not (status & 0x80):
+            # 이 오류가 발생하면 WP# 핀이 LOW(GND)에 연결된 것입니다.
+            raise RuntimeError(f"쓰기 실패: 장치가 쓰기 금지(Write Protected) 상태입니다! (상태=0x{status:02X})")
+
+        # Bit 6 (RDY): 0=Busy, 1=Ready
+        if not (status & 0x40):
+            # wait_ready() 함수가 통과했다면 이 오류는 거의 발생하지 않습니다.
+            raise RuntimeError(f"상태 오류: 장치가 아직 Ready 상태가 아닙니다. (상태=0x{status:02X})")
+            
+        # Bit 0 (FAIL): 0=Pass, 1=Fail  
+        if status & 0x01:
+            raise RuntimeError(f"작업 실패: FAIL 비트가 설정되었습니다. (상태=0x{status:02X})")
+            
+        return True
+        
+    except Exception as e:
+        # 이미 RuntimeError로 상세 메시지를 보냈으므로 그대로 다시 발생시킴
+        raise e
+    finally:
+        # 함수 종료 시 핀 상태를 항상 출력으로 복원
+        self.set_data_pins_output()
+    
     def power_on_sequence(self):
         """파워온 시퀀스 수행"""
         try:

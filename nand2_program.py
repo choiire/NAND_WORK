@@ -62,7 +62,7 @@ def erase_all_blocks_fast(nand):
     
     try:
         start_datetime = datetime.now()
-        print(f"=== 전체 블록 빠른 초기화 시작 (검증 없음) ===")
+        print(f".=== 전체 블록 빠른 초기화 시작 (검증 없음) ===")
         print(f"시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"총 블록 수: {TOTAL_BLOCKS}개")
         print("주의: 이 과정은 모든 데이터를 삭제하며 검증하지 않습니다.")
@@ -122,7 +122,7 @@ def erase_all_blocks_fast(nand):
         end_datetime = datetime.now()
         duration = end_datetime - start_datetime
         
-        print(f"=== 전체 블록 빠른 초기화 완료 ===")
+        print(f".=== 전체 블록 빠른 초기화 완료 ===")
         print(f"완료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"소요 시간: {duration}")
         print(f"성공적으로 삭제된 블록: {len(successful_blocks_erase)}개")
@@ -255,7 +255,7 @@ def program_nand(initialize_blocks: bool = False):
             current_batch_num = (i // BATCH_SIZE) + 1
             total_batches = (total_files + BATCH_SIZE - 1) // BATCH_SIZE
             
-            print(f"\n--- 파일 배치 {current_batch_num}/{total_batches} 처리 중 ({len(batch_files)}개 파일) ---")
+            print(f"\n.--- 파일 배치 {current_batch_num}/{total_batches} 처리 중 ({len(batch_files)}개 파일) ---")
 
             batch_pages_to_write = []
             for filename in batch_files:
