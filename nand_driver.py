@@ -127,12 +127,35 @@ class MT29F4G08ABADAWP:
             raise ValueError("데이터가 비어있습니다")
 
     def check_operation_status(self):
-        """작업 상태 확인"""
-        self.write_command(0x70)  # Read Status
-        status = self.read_data()
-        if status & 0x01:  # Fail bit
-            raise RuntimeError("작업 실패")
-        return True
+        """작업 상태 확인 (핀 방향 전환 로직 추가)"""
+        try:
+            self.write_command(0x70)  # Read Status
+
+            # 데이터를 읽기 전에 핀 방향을 '입력'으로 설정
+            self.set_data_pins_input()
+            GPIO.output(self.CE, GPIO.LOW)
+            
+            # RE#를 토글하여 데이터 읽기
+            GPIO.output(self.RE, GPIO.LOW)
+            self._delay_ns(self.tREA)  # RE# access time
+            status = self.read_data()
+            GPIO.output(self.RE, GPIO.HIGH)
+            
+            GPIO.output(self.CE, GPIO.HIGH)
+            
+            if status & 0x01:  # Bit 0 (FAIL)
+                raise RuntimeError(f"작업 실패 (상태 레지스터: 0x{status:02X})")
+                
+            # 데이터시트에 따라, 상태 확인 후에는 READ MODE(00h)로 전환하여
+            # 데이터 출력을 활성화해야 할 수 있습니다.
+            self.write_command(0x00)
+                
+            return True
+
+        finally:
+            # 작업 후에는 항상 핀을 '출력' 모드로 복원
+            self.set_data_pins_output()
+            self.reset_pins()
 
     def power_on_sequence(self):
         """파워온 시퀀스 수행"""
