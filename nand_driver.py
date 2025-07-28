@@ -251,7 +251,7 @@ class MT29F4G08ABADAWP:
     def set_data_pins_input(self):
         """데이터 핀을 입력 모드로 설정"""
         for pin in self.IO_pins:
-            GPIO.setup(pin, GPIO.IN)
+            GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         self._delay_ns(200)  # 100ns -> 200ns 대기
             
     def write_data(self, data):
