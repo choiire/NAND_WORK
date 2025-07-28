@@ -43,7 +43,10 @@ def program_page_only(nand, page_no: int, write_data: bytes, max_retries: int = 
     return False
 
 def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict:
-    """배치로 페이지들을 검증"""
+    """
+    배치로 페이지들을 검증합니다.
+    데이터 불일치 시, 상세한 디버깅 정보를 포함하여 오류를 발생시킵니다.
+    """
     results = {'success': [], 'failed': []}
     for page_info in page_data_list:
         page_no = page_info['page_no']
@@ -52,18 +55,44 @@ def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict
         for retry in range(max_retries):
             try:
                 read_data = nand.read_page(page_no, len(original_data))
+                
                 if read_data != original_data:
-                    raise ValueError("Read-back 데이터가 원본과 일치하지 않습니다.")
+                    # --- 변경된 부분: 상세 불일치 정보 생성 ---
+                    mismatches = []
+                    # 데이터가 짧게 읽혔을 경우를 대비해 짧은 길이를 기준으로 비교
+                    compare_len = min(len(original_data), len(read_data))
+                    
+                    for i in range(compare_len):
+                        written_byte = original_data[i]
+                        read_byte = read_data[i]
+                        if written_byte != read_byte:
+                            mismatches.append(
+                                f"  - 오프셋 0x{i:04X}: 쓰기=0x{written_byte:02X}, 읽기=0x{read_byte:02X}"
+                            )
+                            if len(mismatches) >= 16: # 최대 16개까지만 표시
+                                mismatches.append("  - ... (불일치 다수)")
+                                break
+                    
+                    error_details = "\n".join(mismatches)
+                    
+                    # 전체 데이터 길이도 확인
+                    len_info = f"데이터 길이: 쓰기={len(original_data)}, 읽기={len(read_data)}"
+                    
+                    # 최종 에러 메시지 생성
+                    raise ValueError(f"데이터 검증 실패:\n{len_info}\n불일치 내역:\n{error_details}")
+                
+                # 검증 성공
                 results['success'].append(page_info)
-                break
+                break # 성공 시 재시도 중단
+                
             except Exception as e:
                 if retry == max_retries - 1:
                     page_info['error'] = str(e)
                     results['failed'].append(page_info)
-                    # 최종 검증 실패 시 Bad Block으로 마킹하지 않음
                 else:
                     print(f"    검증 재시도 {retry + 1}/{max_retries} (페이지 {page_no}): {str(e)}")
                     time.sleep(1)
+                    
     return results
 
 def program_nand():
@@ -162,9 +191,9 @@ def program_nand():
         
         failed_pages_count = len(failed_files_info)
 
-        print(f"\n\n{'='*60}")
-        print(f"=== NAND 플래시 프로그래밍 완료 ===")
-        print(f"{'='*60}")
+        print(f"\n\n{'.='*60}")
+        print(f".=== NAND 플래시 프로그래밍 완료 ===")
+        print(f"{'.='*60}")
         print(f"완료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"소요 시간: {duration}")
         print(f"\n총 처리 시도 페이지 수: {total_pages_to_process}")
@@ -177,7 +206,7 @@ def program_nand():
                 for info in failed_files_info:
                     f.write(f"File: {info['file']}, Reason: {info['reason']}\n")
         
-        print("=" * 60)
+        print(".=" * 60)
         
         return len(failed_files_info) == 0
             
