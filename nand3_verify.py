@@ -1,225 +1,92 @@
-import os
-import sys
-import hashlib
-from datetime import datetime
-from nand_driver import MT29F4G08ABADAWP
-import time
-
-def calculate_block_hash(data):
-    """데이터의 SHA-256 해시값 계산"""
-    return hashlib.sha256(data).hexdigest()
-
-def validate_input_file(filepath: str) -> int:
-    """입력 파일 유효성 검사"""
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(f"파일을 찾을 수 없음: {filepath}")
-        
-    file_size = os.path.getsize(filepath)
-    if file_size == 0:
-        raise ValueError("입력 파일이 비어있습니다")
-        
-    if file_size % (2048 * 64) != 0:
-        raise ValueError("입력 파일 크기가 블록 크기와 맞지 않습니다")
-        
-    if file_size > 512 * 1024 * 1024:  # 512MB
-        raise ValueError("입력 파일이 너무 큽니다 (최대 512MB)")
-        
-    return file_size
-
-def analyze_page_error(page_no, expected_page, actual_page):
-    """페이지 오류 상세 분석"""
-    page_addr = page_no * 0x800
-    mismatch_positions = []
+def verify_nand_sequential(input_filepath: str):
+    """
+    NAND 데이터를 순차적으로 읽어 파일로 저장한 뒤, 원본과 비교 검증합니다.
+    (Bad Block도 읽기 시도)
+    """
+    output_filepath = "output.bin"
+    MAX_RETRIES = 5  # 최대 재시도 횟수
+    RETRY_DELAY = 1    # 재시도 간 대기 시간 (초)
     
     try:
-        for i in range(len(expected_page)):
-            if expected_page[i] != actual_page[i]:
-                mismatch_positions.append({
-                    'offset': page_addr + i,
-                    'expected': expected_page[i],
-                    'actual': actual_page[i]
-                })
-                if len(mismatch_positions) >= 10:  # 첫 10개 오류만 수집
-                    break
-    except Exception as e:
-        raise RuntimeError(f"페이지 오류 분석 실패 (페이지 {page_no}): {str(e)}")
-    
-    return {
-        'page': page_no,
-        'address': f"0x{page_addr:08X}",
-        'mismatches': mismatch_positions
-    }
-
-def analyze_block_error(block_no, expected_block, actual_block):
-    """블록 오류 분석"""
-    try:
-        error_info = {
-            'block': block_no,
-            'start_page': block_no * 64,
-            'address': f"0x{(block_no * 64 * 0x800):08X}",
-            'expected_hash': calculate_block_hash(expected_block),
-            'actual_hash': calculate_block_hash(actual_block)
-        }
-        
-        # 페이지별 오류 분석
-        for page_offset in range(64):
-            page_start = page_offset * 2048
-            page_end = page_start + 2048
-            
-            expected_page = expected_block[page_start:page_end]
-            actual_page = actual_block[page_start:page_end]
-            
-            if expected_page != actual_page:
-                page_error = analyze_page_error(
-                    block_no * 64 + page_offset,
-                    expected_page,
-                    actual_page
-                )
-                error_info.setdefault('page_errors', []).append(page_error)
-        
-        return error_info
-    except Exception as e:
-        raise RuntimeError(f"블록 오류 분석 실패 (블록 {block_no}): {str(e)}")
-
-def verify_nand():
-    try:
+        print("NAND 드라이버 초기화 중 (공장 Bad Block 스캔)...")
         nand = MT29F4G08ABADAWP()
         
-        # 입력 파일 검증
-        input_file = 'input.bin'
-        file_size = validate_input_file(input_file)
-        total_blocks = file_size // (2048 * 64)
+        # 1. 입력 파일 유효성 검사
+        if not os.path.exists(input_filepath):
+            raise FileNotFoundError(f"입력 파일 없음: {input_filepath}")
         
-        start_datetime = datetime.now()
-        print(f"\n=== 검증 시작 (시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}) ===")
-        print(f"총 {total_blocks}개 블록 검증 예정")
+        expected_size = os.path.getsize(input_filepath)
+        total_blocks_to_process = expected_size // (nand.PAGE_SIZE * nand.PAGES_PER_BLOCK)
         
-        errors = []
-        verified_blocks = 0
-        MAX_ERRORS = 100  # 최대 오류 수 제한
-        CHUNK_SIZE = 10   # 한 번에 처리할 블록 수
+        # 2. output.bin 파일이 있다면 삭제
+        if os.path.exists(output_filepath):
+            os.remove(output_filepath)
+            
+        print(f"\n파일 '{input_filepath}'와 NAND 칩의 첫 {total_blocks_to_process}개 블록을 비교합니다.")
+        print("경고: Bad Block으로 표시된 블록도 강제로 읽기를 시도합니다.")
+        start_time = datetime.now()
         
-        with open(input_file, 'rb') as f:
-            for chunk_start in range(0, total_blocks, CHUNK_SIZE):
-                chunk_end = min(chunk_start + CHUNK_SIZE, total_blocks)
-                chunk_blocks = chunk_end - chunk_start
-                
-                try:
-                    for block_offset in range(chunk_blocks):
-                        block_no = chunk_start + block_offset
-                        
-                        # Bad Block 체크
-                        if nand.is_bad_block(block_no):
-                            print(f"\n블록 {block_no}은 Bad Block으로 표시되어 있어 건너뜁니다.")
-                            continue
-                        
-                        # input.bin에서 해당 블록의 데이터 추출
-                        block_offset_bytes = block_no * 2048 * 64
-                        f.seek(block_offset_bytes)
-                        expected_block = f.read(2048 * 64)
-                        
-                        # NAND에서 블록 데이터 읽기
-                        actual_block = bytearray()
-                        start_page = block_no * 64
-                        
+        # 3. 블록 단위로 NAND 읽기 -> output.bin에 쓰기
+        with open(output_filepath, 'ab') as f_out:
+            for block in range(total_blocks_to_process):
+                sys.stdout.write(f"\r블록 처리 중: {block + 1}/{total_blocks_to_process}")
+                sys.stdout.flush()
+
+                # [수정] Bad Block 건너뛰기 로직 삭제
+                if nand.is_bad_block(block):
+                    print(f"\n정보: 블록 {block}은 Bad Block입니다. 데이터 읽기를 시도합니다.")
+
+                # 정상 블록과 동일하게 페이지 단위로 순차 읽기 시도
+                # 페이지 단위로 순차 읽기
+                for page_offset in range(nand.PAGES_PER_BLOCK):
+                    page_no = block * nand.PAGES_PER_BLOCK + page_offset
+                    
+                    # [수정] 페이지 읽기 재시도 루프 추가
+                    read_success = False
+                    for attempt in range(MAX_RETRIES):
                         try:
-                            for page_offset in range(64):
-                                page_no = start_page + page_offset
-                                
-                                # 타임아웃 설정
-                                timeout_start = time.time()
-                                while True:
-                                    try:
-                                        page_data = nand.read_page(page_no)
-                                        actual_block.extend(page_data)
-                                        break
-                                    except Exception as e:
-                                        if time.time() - timeout_start > 5:  # 5초 타임아웃
-                                            raise TimeoutError(f"페이지 {page_no} 읽기 타임아웃")
-                                        time.sleep(0.1)  # 0.1초 대기 후 재시도
-                        
+                            page_data = nand.read_page(page_no)
+                            f_out.write(page_data)
+                            read_success = True
+                            break # 성공 시 재시도 루프 탈출
                         except Exception as e:
-                            print(f"\n블록 {block_no} 읽기 중 오류 발생: {str(e)}")
-                            nand.mark_bad_block(block_no)
-                            errors.append({
-                                'block': block_no,
-                                'error': str(e)
-                            })
-                            if len(errors) >= MAX_ERRORS:
-                                break
-                            continue
-                        
-                        # 블록 데이터 비교 (ECC 디코딩 이후)
-                        try:
-                            if expected_block != actual_block:
-                                error_info = analyze_block_error(
-                                    block_no,
-                                    expected_block,
-                                    actual_block
-                                )
-                                errors.append(error_info)
-                                
-                                if len(errors) >= MAX_ERRORS:
-                                    print(f"\n최대 오류 수({MAX_ERRORS})에 도달하여 검증 중단")
-                                    break
-                        except Exception as e:
-                            print(f"\n블록 {block_no} 비교 중 오류 발생: {str(e)}")
-                            errors.append({
-                                'block': block_no,
-                                'error': str(e)
-                            })
-                            if len(errors) >= MAX_ERRORS:
-                                break
-                        
-                        verified_blocks += 1
-                        if verified_blocks % 10 == 0:  # 10블록마다 진행상황 출력
-                            sys.stdout.write(f"\r검증 중: {verified_blocks}/{total_blocks} 블록")
-                            sys.stdout.flush()
-                            
-                except Exception as e:
-                    print(f"\n청크 처리 중 오류 발생 (블록 {chunk_start}-{chunk_end-1}): {str(e)}")
-                    continue
-                
-                if len(errors) >= MAX_ERRORS:
-                    break
+                            print(f"\n경고: 페이지 {page_no} 읽기 실패 (시도 {attempt + 1}/{MAX_RETRIES}). {RETRY_DELAY}초 후 재시도... 오류: {e}")
+                            time.sleep(RETRY_DELAY)
+                    
+                    if not read_success:
+                        print(f"\n오류: 페이지 {page_no} 최종 읽기 실패. 해당 블록을 0xFF로 채웁니다.")
+                        remaining_pages = nand.PAGES_PER_BLOCK - page_offset
+                        f_out.write(b'\xFF' * (remaining_pages * nand.PAGE_SIZE))
+                        nand.mark_bad_block(block)
+                        break # 다음 블록으로 넘어감
+
+
+        read_duration = datetime.now() - start_time
+        print(f"\n\nNAND 데이터 읽기 및 파일 저장 완료. (소요 시간: {read_duration})")
+
+        # 4. 최종 검증 (크기 및 해시 비교) - 기존과 동일
+        print("\n최종 파일 검증 시작...")
         
-        end_datetime = datetime.now()
-        duration = end_datetime - start_datetime
+        print("입력 파일 해시 계산 중...")
+        expected_hash = calculate_file_hash(input_filepath)
         
-        # 결과 출력
-        print(f"\n\n=== 검증 완료 (소요 시간: {duration}) ===")
+        print("출력 파일 해시 계산 중...")
+        actual_size = os.path.getsize(output_filepath)
+        actual_hash = calculate_file_hash(output_filepath)
         
-        if not errors:
-            print("결과: 모든 데이터 일치")
+        print("\n--- 검증 결과 ---")
+        print(f"예상 크기 : {expected_size} Bytes")
+        print(f"실제 크기 : {actual_size} Bytes")
+        print(f"예상 해시 : {expected_hash}")
+        print(f"실제 해시 : {actual_hash}")
+        
+        if actual_size == expected_size and actual_hash == expected_hash:
+            print("\n[성공] 데이터가 완벽하게 일치합니다! 🎉")
             return True
         else:
-            print(f"결과: {len(errors)}개 블록에서 오류 발견")
-            
-            # 처음 5개의 오류 블록만 상세 출력
-            for error in errors[:5]:
-                if 'error' in error:
-                    print(f"\n블록 {error['block']}: {error['error']}")
-                else:
-                    print(f"\n블록 {error['block']} (시작 주소: {error['address']}):")
-                    print(f"예상 해시값: {error['expected_hash']}")
-                    print(f"실제 해시값: {error['actual_hash']}")
-                    
-                    if 'page_errors' in error:
-                        print("페이지별 오류 상세:")
-                        for page_error in error['page_errors']:
-                            print(f"\n  페이지 {page_error['page']} (주소: {page_error['address']}):")
-                            for mismatch in page_error['mismatches']:
-                                print(f"    오프셋 0x{mismatch['offset']:08X}: "
-                                      f"예상값 0x{mismatch['expected']:02X}, "
-                                      f"실제값 0x{mismatch['actual']:02X}")
-            
-            if len(errors) > 5:
-                print(f"\n... 외 {len(errors)-5}개 블록에서 오류 발생")
+            print("\n[실패] 데이터가 일치하지 않습니다!")
             return False
-            
-    except Exception as e:
-        print(f"\n치명적 오류 발생: {str(e)}")
-        return False
 
-if __name__ == "__main__":
-    verify_nand() 
+    except Exception as e:
+        print(f"\n치명적 오류 발생: {e}")
+        return False
