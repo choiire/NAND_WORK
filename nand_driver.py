@@ -8,17 +8,21 @@ class MT29F4G08ABADAWP:
     PAGES_PER_BLOCK = 64
     TOTAL_BLOCKS = 4096
     
-    # 타이밍 상수 (ns)
-    tWB = 100   # WE# high to R/B# low
-    tR = 25000  # Data Transfer from Cell to Register
-    tRR = 20    # RE# low to RE# high
-    tWC = 25    # Write Cycle Time
-    tWP = 10    # WE# pulse width
-    tWH = 10    # WE# high hold time
-    tADL = 70   # ALE to data loading time
-    tREA = 20   # RE# access time
-    tREH = 10   # RE# high hold time
-    tWHR = 60   # WE# high to RE# low
+    # 타이밍 상수 (ns) - 더 보수적인 값으로 조정
+    tWB = 200   # WE# high to R/B# low (100ns -> 200ns)
+    tR = 30000  # Data Transfer from Cell to Register (25us -> 30us)
+    tRR = 30    # RE# low to RE# high (20ns -> 30ns)
+    tWC = 35    # Write Cycle Time (25ns -> 35ns)
+    tWP = 15    # WE# pulse width (10ns -> 15ns)
+    tWH = 15    # WE# high hold time (10ns -> 15ns)
+    tADL = 100   # ALE to data loading time (70ns -> 100ns)
+    tREA = 30   # RE# access time (20ns -> 30ns)
+    tREH = 15   # RE# high hold time (10ns -> 15ns)
+    tWHR = 80   # WE# high to RE# low (60ns -> 80ns)
+    tCLS = 15   # CLE setup time
+    tCLH = 10   # CLE hold time
+    tALS = 15   # ALE setup time
+    tALH = 10   # ALE hold time
     
     def __init__(self, skip_bad_block_scan=False):
         # GPIO 핀 설정
@@ -92,7 +96,7 @@ class MT29F4G08ABADAWP:
                 GPIO.setup(pin, GPIO.OUT)
                 GPIO.output(pin, GPIO.HIGH)
                 
-            self._delay_ns(100)  # 100ns 대기
+            self._delay_ns(200)  # 100ns -> 200ns 대기
         except Exception as e:
             raise RuntimeError(f"핀 리셋 실패: {str(e)}")
             
@@ -127,12 +131,43 @@ class MT29F4G08ABADAWP:
             raise ValueError("데이터가 비어있습니다")
 
     def check_operation_status(self):
-        """작업 상태 확인"""
-        self.write_command(0x70)  # Read Status
-        status = self.read_data()
-        if status & 0x01:  # Fail bit
-            raise RuntimeError("작업 실패")
-        return True
+        """작업 상태 확인 - 개선된 버전"""
+        try:
+            # 상태 읽기 명령
+            GPIO.output(self.CE, GPIO.LOW)
+            GPIO.output(self.CLE, GPIO.HIGH)
+            GPIO.output(self.ALE, GPIO.LOW)
+            self._delay_ns(self.tCLS)  # CLE setup time
+            
+            GPIO.output(self.WE, GPIO.LOW)
+            self._delay_ns(self.tWP)
+            self.write_data(0x70)  # Read Status command
+            GPIO.output(self.WE, GPIO.HIGH)
+            self._delay_ns(self.tWH)
+            
+            GPIO.output(self.CLE, GPIO.LOW)
+            self._delay_ns(self.tCLH)  # CLE hold time
+            self._delay_ns(self.tWHR)  # WE# high to RE# low
+            
+            # 상태 바이트 읽기
+            self.set_data_pins_input()
+            GPIO.output(self.RE, GPIO.LOW)
+            self._delay_ns(self.tREA)  # RE# access time
+            status = self.read_data()
+            GPIO.output(self.RE, GPIO.HIGH)
+            self._delay_ns(self.tREH)  # RE# high hold time
+            
+            GPIO.output(self.CE, GPIO.HIGH)
+            self.set_data_pins_output()
+            
+            if status & 0x01:  # Fail bit
+                print(f"상태 확인 실패: 0x{status:02X}")
+                return False
+            return True
+            
+        except Exception as e:
+            print(f"상태 확인 중 오류: {str(e)}")
+            return False
 
     def power_on_sequence(self):
         """파워온 시퀀스 수행"""
@@ -175,22 +210,24 @@ class MT29F4G08ABADAWP:
             raise RuntimeError(f"파워온 시퀀스 실패: {str(e)}")
             
     def wait_ready(self):
-        """R/B# 핀이 Ready(HIGH) 상태가 될 때까지 대기"""
+        """R/B# 핀이 Ready(HIGH) 상태가 될 때까지 대기 - 개선된 버전"""
         # tWB 대기
-        self._delay_ns(self.tWB)  # 100ns
+        self._delay_ns(self.tWB)  # 200ns
         
         # R/B# 신호가 HIGH가 될 때까지 대기
         retry_count = 0
-        max_retries = 5
+        max_retries = 10  # 5 -> 10으로 증가
         
         while retry_count < max_retries:
             timeout_start = time.time()
             while GPIO.input(self.RB) == GPIO.LOW:
-                if time.time() - timeout_start > 0.01:  # 10ms 타임아웃
+                if time.time() - timeout_start > 0.02:  # 10ms -> 20ms 타임아웃 연장
                     break
                 time.sleep(0.0001)  # 100us 간격으로 체크
                 
             if GPIO.input(self.RB) == GPIO.HIGH:
+                # 추가 안정화 대기
+                self._delay_ns(100)
                 return  # Ready 상태 확인
                 
             retry_count += 1
@@ -203,31 +240,38 @@ class MT29F4G08ABADAWP:
         """데이터 핀을 출력 모드로 설정"""
         for pin in self.IO_pins:
             GPIO.setup(pin, GPIO.OUT)
-        self._delay_ns(100)  # 100ns 대기
+        self._delay_ns(200)  # 100ns -> 200ns 대기
             
     def set_data_pins_input(self):
         """데이터 핀을 입력 모드로 설정"""
         for pin in self.IO_pins:
             GPIO.setup(pin, GPIO.IN)
-        self._delay_ns(100)  # 100ns 대기
+        self._delay_ns(200)  # 100ns -> 200ns 대기
             
     def write_data(self, data):
-        """8비트 데이터 쓰기 (타이밍 제어 추가)"""
+        """8비트 데이터 쓰기 (타이밍 제어 강화)"""
         # WE# 사이클 타임 준수
         cycle_start = time.perf_counter_ns()
         
+        # 데이터 설정
         for i in range(8):
             GPIO.output(self.IO_pins[i], (data >> i) & 1)
             
+        # 데이터 설정 후 안정화 대기
+        self._delay_ns(50)  # 추가된 안정화 대기
+        
         # tWC 타이밍 준수
         elapsed = time.perf_counter_ns() - cycle_start
         if elapsed < self.tWC:
             self._delay_ns(self.tWC - elapsed)
 
     def read_data(self):
-        """8비트 데이터 읽기 (타이밍 제어 추가)"""
+        """8비트 데이터 읽기 (타이밍 제어 강화)"""
         # RE# 사이클 타임 준수
         cycle_start = time.perf_counter_ns()
+        
+        # 데이터 읽기 전 안정화 대기
+        self._delay_ns(50)  # 추가된 안정화 대기
         
         data = 0
         for i in range(8):
@@ -241,33 +285,41 @@ class MT29F4G08ABADAWP:
         return data
         
     def write_command(self, cmd):
-        """커맨드 쓰기"""
+        """커맨드 쓰기 - 개선된 타이밍"""
         GPIO.output(self.CE, GPIO.LOW)
+        self._delay_ns(50)  # CE# setup time
+        
         GPIO.output(self.CLE, GPIO.HIGH)
+        self._delay_ns(self.tCLS)  # CLE setup time
         GPIO.output(self.ALE, GPIO.LOW)
         
         GPIO.output(self.WE, GPIO.LOW)
+        self._delay_ns(self.tWP)  # WE# pulse width
         self.write_data(cmd)
         GPIO.output(self.WE, GPIO.HIGH)
+        self._delay_ns(self.tWH)  # WE# high hold time
         
         GPIO.output(self.CLE, GPIO.LOW)
+        self._delay_ns(self.tCLH)  # CLE hold time
 
     def write_address(self, addr):
-        """주소 쓰기"""
+        """주소 쓰기 - 개선된 타이밍"""
         GPIO.output(self.CE, GPIO.LOW)   # Chip Enable
-        self._delay_ns(100)  # 100ns 대기
+        self._delay_ns(50)  # CE# setup time
         
         GPIO.output(self.CLE, GPIO.LOW)  # Command Latch Disable
         GPIO.output(self.ALE, GPIO.HIGH) # Address Latch Enable
-        self._delay_ns(100)  # 100ns 대기
+        self._delay_ns(self.tALS)  # ALE setup time
         
         GPIO.output(self.WE, GPIO.LOW)   # Write Enable
+        self._delay_ns(self.tWP)  # WE# pulse width
         self.write_data(addr)
         GPIO.output(self.WE, GPIO.HIGH)  # Write Disable
         self._delay_ns(self.tWH)  # WE# high hold time
         
         GPIO.output(self.ALE, GPIO.LOW)  # Address Latch Disable
-        self._delay_ns(100)  # 100ns 대기
+        self._delay_ns(self.tALH)  # ALE hold time
+        self._delay_ns(self.tADL)  # ALE to data loading time
 
     def enable_internal_ecc(self):
         """데이터시트 사양에 따라 칩의 내장 ECC 엔진을 활성화합니다."""
@@ -280,16 +332,17 @@ class MT29F4G08ABADAWP:
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
             GPIO.output(self.ALE, GPIO.HIGH)
-            self._delay_ns(10) # tALS
+            self._delay_ns(self.tALS) # ALE setup time
 
             GPIO.output(self.WE, GPIO.LOW)
-            self._delay_ns(12) # tWP
+            self._delay_ns(self.tWP) # WE# pulse width
             self.write_data(0x90) # Feature Address
             GPIO.output(self.WE, GPIO.HIGH)
-            self._delay_ns(10) # tWH
+            self._delay_ns(self.tWH) # WE# high hold time
             
             GPIO.output(self.ALE, GPIO.LOW)
-            self._delay_ns(70) # tADL (Address to Data Latch Delay)
+            self._delay_ns(self.tALH) # ALE hold time
+            self._delay_ns(self.tADL) # Address to Data Latch Delay
 
             # Parameters (P1=08h for ECC Enable, P2-P4=00h) 전송
             params = [0x08, 0x00, 0x00, 0x00]
@@ -299,10 +352,10 @@ class MT29F4G08ABADAWP:
 
             for p in params:
                 GPIO.output(self.WE, GPIO.LOW)
-                self._delay_ns(12) # tWP
+                self._delay_ns(self.tWP) # WE# pulse width
                 self.write_data(p)
                 GPIO.output(self.WE, GPIO.HIGH)
-                self._delay_ns(10) # tWH
+                self._delay_ns(self.tWH) # WE# high hold time
             
             self.wait_ready() # tFEAT (Feature operation time) 대기
             print("내부 ECC 엔진이 성공적으로 활성화되었습니다.")
@@ -356,7 +409,7 @@ class MT29F4G08ABADAWP:
                     GPIO.output(self.CE, GPIO.LOW)
                     
                     GPIO.output(self.RE, GPIO.LOW)
-                    self._delay_ns(22) # tREA (22ns)
+                    self._delay_ns(self.tREA) # RE# access time
                     marker_byte = self.read_data()
                     GPIO.output(self.RE, GPIO.HIGH)
                     
@@ -391,7 +444,7 @@ class MT29F4G08ABADAWP:
         raise RuntimeError("사용 가능한 블록이 없습니다")
 
     def write_page(self, page_no: int, data: bytes):
-        """한 페이지 쓰기 (내장 하드웨어 ECC 사용)"""
+        """한 페이지 쓰기 (내장 하드웨어 ECC 사용) - 개선된 버전"""
         # 데이터 크기 유효성 검사 (페이지 크기만 확인)
         if len(data) > self.PAGE_SIZE:
             raise ValueError(f"데이터 크기가 페이지 크기({self.PAGE_SIZE} bytes)를 초과합니다.")
@@ -412,18 +465,22 @@ class MT29F4G08ABADAWP:
             # [2] 주소 전송 (5 사이클)
             self._write_full_address(page_no, col_addr=0)
             
-            # [3] 데이터 전송 (인코딩 없이 원본 데이터 전송)
+            # [3] 데이터 전송 (개선된 타이밍)
             self.set_data_pins_output()
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
             GPIO.output(self.ALE, GPIO.LOW)
             
-            for byte in data:
+            for byte_idx, byte in enumerate(data):
                 GPIO.output(self.WE, GPIO.LOW)
-                self._delay_ns(12) # tWP
+                self._delay_ns(self.tWP) # WE# pulse width
                 self.write_data(byte)
                 GPIO.output(self.WE, GPIO.HIGH)
-                self._delay_ns(10) # tWH
+                self._delay_ns(self.tWH) # WE# high hold time
+                
+                # 매 256바이트마다 짧은 대기 (버퍼링 고려)
+                if (byte_idx + 1) % 256 == 0:
+                    self._delay_ns(1000)  # 1us 대기
                 
             # [4] 쓰기 확정 명령 (10h)
             self.write_command(0x10)
@@ -444,6 +501,7 @@ class MT29F4G08ABADAWP:
     def _write_full_address(self, page_no: int, col_addr: int = 0):
         """
         데이터시트(Table 2) 사양에 맞게 5바이트 전체 주소(컬럼+로우)를 조합하여 전송합니다.
+        개선된 타이밍 적용
         """
         # 주소 계산
         page_in_block = page_no % self.PAGES_PER_BLOCK  # PA[5:0] (0-63)
@@ -468,24 +526,26 @@ class MT29F4G08ABADAWP:
 
         addresses = [addr_byte1, addr_byte2, addr_byte3, addr_byte4, addr_byte5]
 
-        # 생성된 5바이트 주소 전송
+        # 생성된 5바이트 주소 전송 (개선된 타이밍)
         GPIO.output(self.CE, GPIO.LOW)
+        self._delay_ns(50)  # CE# setup time
         GPIO.output(self.CLE, GPIO.LOW)
         GPIO.output(self.ALE, GPIO.HIGH)
-        self._delay_ns(10) # tALS (ALE setup time)
+        self._delay_ns(self.tALS) # ALE setup time
 
         for addr_byte in addresses:
             GPIO.output(self.WE, GPIO.LOW)
-            self._delay_ns(12) # tWP (WE# Pulse Width)
+            self._delay_ns(self.tWP) # WE# Pulse Width
             self.write_data(addr_byte)
             GPIO.output(self.WE, GPIO.HIGH)
-            self._delay_ns(10) # tWH (WE# High Hold Time)
+            self._delay_ns(self.tWH) # WE# High Hold Time
             
         GPIO.output(self.ALE, GPIO.LOW)
-        self._delay_ns(70) # tADL (ALE to Data Loading time)
+        self._delay_ns(self.tALH) # ALE hold time
+        self._delay_ns(self.tADL) # ALE to Data Loading time
 
     def read_page(self, page_no: int, length: int = 2048):
-        """한 페이지 읽기 (내장 하드웨어 ECC 사용)"""
+        """한 페이지 읽기 (내장 하드웨어 ECC 사용) - 개선된 버전"""
         try:
             self.validate_page(page_no)
             if self.is_bad_block(page_no // self.PAGES_PER_BLOCK):
@@ -501,8 +561,8 @@ class MT29F4G08ABADAWP:
             # [3] 데이터가 캐시로 로드될 때까지 대기 (tR_ECC)
             self.wait_ready()
             
-            # [4] ECC 처리 결과 확인 (중요!)
-            status = self.check_read_status() # 아래에 추가할 새 함수
+            # [4] ECC 처리 결과 확인
+            status = self.check_read_status()
             if status == "UNCORRECTABLE_ERROR":
                 print(f"경고: 페이지 {page_no}에서 수정 불가능한 ECC 오류 발생!")
                 # 수정 불가능한 경우, FF로 채워진 데이터를 반환하거나 예외 발생
@@ -510,10 +570,24 @@ class MT29F4G08ABADAWP:
             elif status == "CORRECTED_WITH_REWRITE_RECOMMENDED":
                 print(f"정보: 페이지 {page_no}에서 ECC 오류가 수정되었으나, 해당 블록을 재기록(refresh)하는 것을 권장합니다.")
 
-            # [5] (오류 수정된) 데이터 읽기
+            # [5] (오류 수정된) 데이터 읽기 - 개선된 버전
             self.set_data_pins_input()
             GPIO.output(self.CE, GPIO.LOW)
-            read_bytes = [self.read_data() for _ in range(length)]
+            self._delay_ns(50)  # CE# setup time
+            
+            read_bytes = []
+            for i in range(length):
+                GPIO.output(self.RE, GPIO.LOW)
+                self._delay_ns(self.tREA)  # RE# access time
+                byte_data = self.read_data()
+                GPIO.output(self.RE, GPIO.HIGH)
+                self._delay_ns(self.tREH)  # RE# high hold time
+                read_bytes.append(byte_data)
+                
+                # 매 256바이트마다 짧은 대기 (안정성 향상)
+                if (i + 1) % 256 == 0:
+                    self._delay_ns(1000)  # 1us 대기
+            
             GPIO.output(self.CE, GPIO.HIGH)
             # 읽기 후에는 finally 블록에서 출력 모드로 자동 복원됨
                 
@@ -525,19 +599,48 @@ class MT29F4G08ABADAWP:
             self.reset_pins()
 
     def check_read_status(self) -> str:
-        """읽기 동작 후 ECC 상태를 확인합니다."""
-        self.write_command(0x70)  # Read Status
-        status_byte = self.read_data()
-        
-        # READ MODE(00h)로 다시 전환하여 데이터 출력을 활성화해야 함
-        self.write_command(0x00)
-
-        if status_byte & 0x01:  # Bit 0 (FAIL): Uncorrectable error
-            return "UNCORRECTABLE_ERROR"
-        if status_byte & 0x08:  # Bit 3 (Rewrite recommended)
-            return "CORRECTED_WITH_REWRITE_RECOMMENDED"
+        """읽기 동작 후 ECC 상태를 확인합니다. - 개선된 버전"""
+        try:
+            # 상태 읽기 명령
+            GPIO.output(self.CE, GPIO.LOW)
+            GPIO.output(self.CLE, GPIO.HIGH)
+            GPIO.output(self.ALE, GPIO.LOW)
+            self._delay_ns(self.tCLS)  # CLE setup time
             
-        return "SUCCESS"
+            GPIO.output(self.WE, GPIO.LOW)
+            self._delay_ns(self.tWP)
+            self.write_data(0x70)  # Read Status command
+            GPIO.output(self.WE, GPIO.HIGH)
+            self._delay_ns(self.tWH)
+            
+            GPIO.output(self.CLE, GPIO.LOW)
+            self._delay_ns(self.tCLH)  # CLE hold time
+            self._delay_ns(self.tWHR)  # WE# high to RE# low
+            
+            # 상태 바이트 읽기
+            self.set_data_pins_input()
+            GPIO.output(self.RE, GPIO.LOW)
+            self._delay_ns(self.tREA)  # RE# access time
+            status_byte = self.read_data()
+            GPIO.output(self.RE, GPIO.HIGH)
+            self._delay_ns(self.tREH)  # RE# high hold time
+            
+            GPIO.output(self.CE, GPIO.HIGH)
+            self.set_data_pins_output()
+            
+            # READ MODE(00h)로 다시 전환하여 데이터 출력을 활성화해야 함
+            self.write_command(0x00)
+
+            if status_byte & 0x01:  # Bit 0 (FAIL): Uncorrectable error
+                return "UNCORRECTABLE_ERROR"
+            if status_byte & 0x08:  # Bit 3 (Rewrite recommended)
+                return "CORRECTED_WITH_REWRITE_RECOMMENDED"
+                
+            return "SUCCESS"
+            
+        except Exception as e:
+            print(f"상태 확인 중 오류: {str(e)}")
+            return "ERROR"
     
     def read_page_two_plane(self, page_no1: int, page_no2: int, length: int = 2048) -> (bytes, bytes):
         """
@@ -583,26 +686,26 @@ class MT29F4G08ABADAWP:
                 print(f"\n경고: 페이지 {page_no2}에서 수정 불가능한 ECC 오류 발생!")
                 data2 = b'\xFF' * length
             else:
-                self.set_data_pins_input() # <<-- 읽기 직전에 입력으로 변경
+                self.set_data_pins_input()
                 GPIO.output(self.CE, GPIO.LOW)
                 read_bytes_2 = [self.read_data() for _ in range(length)]
                 data2 = bytes(read_bytes_2)
                 GPIO.output(self.CE, GPIO.HIGH)
-                self.set_data_pins_output() # <<-- 읽기 직후에 출력으로 복원
+                self.set_data_pins_output()
 
-            # [6] 6. 플레인 변경 (이제 핀이 출력 모드이므로 안전)
+            # [6] 플레인 변경 (이제 핀이 출력 모드이므로 안전)
             self.write_command(0x06)
             self._write_full_address(page_no1)
             self.write_command(0xE0)
             self._delay_ns(self.tWHR)
 
-            # [7] 7. page_no1의 ECC 상태 확인 및 데이터 읽기
+            # [7] page_no1의 ECC 상태 확인 및 데이터 읽기
             status1 = self.check_read_status()
             if status1 == "UNCORRECTABLE_ERROR":
                 print(f"\n경고: 페이지 {page_no1}에서 수정 불가능한 ECC 오류 발생!")
                 data1 = b'\xFF' * length
             else:
-                self.set_data_pins_input() # <<-- 다시 읽기 직전에 입력으로 변경
+                self.set_data_pins_input()
                 GPIO.output(self.CE, GPIO.LOW)
                 read_bytes_1 = [self.read_data() for _ in range(length)]
                 data1 = bytes(read_bytes_1)
@@ -613,7 +716,7 @@ class MT29F4G08ABADAWP:
         except Exception as e:
             raise RuntimeError(f"Two-plane 페이지 읽기 실패 ({page_no1}, {page_no2}): {str(e)}")
         finally:
-            self.reset_pins() # 최종적으로 핀 상태를 안전하게 복원
+            self.reset_pins()
             
     def _write_row_address(self, page_no: int):
         """
@@ -638,21 +741,23 @@ class MT29F4G08ABADAWP:
 
         row_addresses = [addr_byte3, addr_byte4, addr_byte5]
 
-        # 생성된 주소 전송
+        # 생성된 주소 전송 (개선된 타이밍)
         GPIO.output(self.CE, GPIO.LOW)
+        self._delay_ns(50)  # CE# setup time
         GPIO.output(self.CLE, GPIO.LOW)
         GPIO.output(self.ALE, GPIO.HIGH)
-        self._delay_ns(10) # tALS
+        self._delay_ns(self.tALS) # ALE setup time
 
         for addr_byte in row_addresses:
             GPIO.output(self.WE, GPIO.LOW)
-            self._delay_ns(12) # tWP
+            self._delay_ns(self.tWP) # WE# pulse width
             self.write_data(addr_byte)
             GPIO.output(self.WE, GPIO.HIGH)
-            self._delay_ns(10) # tWH
+            self._delay_ns(self.tWH) # WE# high hold time
             
         GPIO.output(self.ALE, GPIO.LOW)
-        self._delay_ns(70) # tADL
+        self._delay_ns(self.tALH) # ALE hold time
+        self._delay_ns(self.tADL) # ALE to data loading time
     
     def erase_block(self, page_no: int):
         """
@@ -770,6 +875,7 @@ class MT29F4G08ABADAWP:
         """
         한 페이지 전체(메인+스페어, 2112 바이트)를 씁니다.
         데이터가 2112 바이트보다 작으면 나머지는 0xFF로 채웁니다.
+        개선된 버전
         """
         # 전체 페이지 크기 (2112 바이트) 유효성 검사
         full_page_size = self.PAGE_SIZE + self.SPARE_SIZE
@@ -792,18 +898,22 @@ class MT29F4G08ABADAWP:
             # [2] 주소 전송 (5 사이클)
             self._write_full_address(page_no, col_addr=0)
             
-            # [3] 데이터 전송
+            # [3] 데이터 전송 (개선된 타이밍)
             self.set_data_pins_output()
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
             GPIO.output(self.ALE, GPIO.LOW)
             
-            for byte in data:
+            for byte_idx, byte in enumerate(data):
                 GPIO.output(self.WE, GPIO.LOW)
-                self._delay_ns(12) # tWP
+                self._delay_ns(self.tWP) # WE# pulse width
                 self.write_data(byte)
                 GPIO.output(self.WE, GPIO.HIGH)
-                self._delay_ns(10) # tWH
+                self._delay_ns(self.tWH) # WE# high hold time
+                
+                # 매 256바이트마다 짧은 대기 (버퍼링 고려)
+                if (byte_idx + 1) % 256 == 0:
+                    self._delay_ns(1000)  # 1us 대기
                 
             # [4] 쓰기 확정 명령 (10h)
             self.write_command(0x10)
