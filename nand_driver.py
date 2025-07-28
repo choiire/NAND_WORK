@@ -71,12 +71,17 @@ class MT29F4G08ABADAWP:
             raise RuntimeError(f"GPIO 초기화 실패: {str(e)}")
 
     def _delay_ns(self, nanoseconds: int):
-        """나노초 단위의 정밀한 시간 지연을 수행합니다 (비지 웨이트)."""
         if nanoseconds <= 0:
             return
-        end_time = time.perf_counter_ns() + nanoseconds
-        while time.perf_counter_ns() < end_time:
-            pass
+        
+        # 매우 짧은 지연의 경우 더 정확한 방법 사용
+        if nanoseconds < 1000:  # 1μs 미만
+            end_time = time.perf_counter_ns() + nanoseconds
+            while time.perf_counter_ns() < end_time:
+                pass
+        else:
+            # 더 긴 지연의 경우 sleep 사용
+            time.sleep(nanoseconds / 1_000_000_000)
             
     def reset_pins(self):
         """핀 상태를 안전한 기본값으로 리셋"""
@@ -129,33 +134,66 @@ class MT29F4G08ABADAWP:
     def check_operation_status(self):
         """작업 상태 확인 (핀 방향 전환 로직 추가)"""
         try:
-            self.write_command(0x70)  # Read Status
-
-            # 데이터를 읽기 전에 핀 방향을 '입력'으로 설정
-            self.set_data_pins_input()
+            # 상태 읽기 명령 전송
             GPIO.output(self.CE, GPIO.LOW)
+            GPIO.output(self.CLE, GPIO.HIGH)
+            GPIO.output(self.ALE, GPIO.LOW)
+            self._delay_ns(10)
             
-            # RE#를 토글하여 데이터 읽기
+            GPIO.output(self.WE, GPIO.LOW)
+            self._delay_ns(self.tWP)
+            self.write_data(0x70)  # Read Status
+            GPIO.output(self.WE, GPIO.HIGH)
+            self._delay_ns(self.tWH)
+            
+            GPIO.output(self.CLE, GPIO.LOW)
+            self._delay_ns(self.tWHR)  # WE high to RE low time
+            
+            # 데이터 핀을 입력으로 변경
+            self.set_data_pins_input()
+            
+            # 상태 읽기
             GPIO.output(self.RE, GPIO.LOW)
-            self._delay_ns(self.tREA)  # RE# access time
+            self._delay_ns(self.tREA)  # RE access time
             status = self.read_data()
             GPIO.output(self.RE, GPIO.HIGH)
+            self._delay_ns(self.tREH)  # RE high hold time
             
             GPIO.output(self.CE, GPIO.HIGH)
-            self.set_data_pins_output()
+            
+            print(f"      -> 상태 레지스터: 0x{status:02X}")
+            
+            # 상태 분석
             if status & 0x01:  # Bit 0 (FAIL)
-                raise RuntimeError(f"작업 실패 (상태 레지스터: 0x{status:02X})")
-                
-            # 데이터시트에 따라, 상태 확인 후에는 READ MODE(00h)로 전환하여
-            # 데이터 출력을 활성화해야 할 수 있습니다.
-            self.write_command(0x00)
-                
+                print(f"      -> 오류: 작업 실패 (FAIL 비트 설정)")
+                return False
+            
+            if not (status & 0x40):  # Bit 6 (RDY)
+                print(f"      -> 경고: 디바이스가 아직 준비되지 않음")
+                time.sleep(0.001)  # 추가 대기
+            
+            # READ MODE로 복귀
+            GPIO.output(self.CE, GPIO.LOW)
+            GPIO.output(self.CLE, GPIO.HIGH)
+            
+            GPIO.output(self.WE, GPIO.LOW)
+            self._delay_ns(self.tWP)
+            self.write_data(0x00)  # READ MODE
+            GPIO.output(self.WE, GPIO.HIGH)
+            self._delay_ns(self.tWH)
+            
+            GPIO.output(self.CLE, GPIO.LOW)
+            GPIO.output(self.CE, GPIO.HIGH)
+            
             return True
 
+        except Exception as e:
+            print(f"      -> 상태 확인 중 오류: {str(e)}")
+            return False
         finally:
-            # 작업 후에는 항상 핀을 '출력' 모드로 복원
             self.set_data_pins_output()
             self.reset_pins()
+
 
     def power_on_sequence(self):
         """파워온 시퀀스 수행"""
@@ -202,24 +240,40 @@ class MT29F4G08ABADAWP:
         # tWB 대기
         self._delay_ns(self.tWB)  # 100ns
         
+        # R/B# 신호가 LOW로 변하는 것을 확인
+        timeout_start = time.time()
+        rb_went_low = False
+        
+        # 먼저 R/B#가 LOW로 변하는지 확인 (최대 1ms 대기)
+        while time.time() - timeout_start < 0.001:
+            if GPIO.input(self.RB) == GPIO.LOW:
+                rb_went_low = True
+                break
+            time.sleep(0.0001)  # 100μs 간격
+        
+        if not rb_went_low:
+            print("      -> 경고: R/B# 신호가 LOW로 변하지 않음")
+        
         # R/B# 신호가 HIGH가 될 때까지 대기
         retry_count = 0
-        max_retries = 5
+        max_retries = 10
         
         while retry_count < max_retries:
             timeout_start = time.time()
             while GPIO.input(self.RB) == GPIO.LOW:
-                if time.time() - timeout_start > 0.01:  # 10ms 타임아웃
+                if time.time() - timeout_start > 0.05:  # 50ms 타임아웃 (길게 설정)
                     break
-                time.sleep(0.0001)  # 100us 간격으로 체크
-                
+                time.sleep(0.001)  # 1ms 간격으로 체크
+            
             if GPIO.input(self.RB) == GPIO.HIGH:
+                print("      -> R/B# 신호 Ready 확인")
                 return  # Ready 상태 확인
-                
+            
             retry_count += 1
             if retry_count < max_retries:
-                time.sleep(0.001)  # 1ms 대기 후 재시도
-                
+                print(f"      -> R/B# 재시도 {retry_count}/{max_retries}")
+                time.sleep(0.005)  # 5ms 대기 후 재시도
+        
         raise RuntimeError("R/B# 시그널 타임아웃")
             
     def set_data_pins_output(self):
@@ -793,6 +847,7 @@ class MT29F4G08ABADAWP:
     def write_full_page(self, page_no: int, data: bytes):
         """
         한 페이지 전체를 쓰며, 각 단계를 상세히 출력합니다.
+        수정된 버전 - 핀 제어와 타이밍을 개선
         """
         full_page_size = self.PAGE_SIZE + self.SPARE_SIZE
         if len(data) > full_page_size:
@@ -803,11 +858,31 @@ class MT29F4G08ABADAWP:
 
         try:
             self.validate_page(page_no)
+            block_no = page_no // self.PAGES_PER_BLOCK
+            if self.is_bad_block(block_no):
+                raise RuntimeError(f"Bad Block({block_no})에 쓰기 시도")
+            
             print(f"    [쓰기 시작] Page {page_no}")
+            
+            # 초기 핀 상태 확실히 설정
+            self.reset_pins()
+            self.set_data_pins_output()
             
             # [1] 쓰기 시작 명령 (80h)
             print("      -> 1. 쓰기 시작 명령(80h) 전송")
-            self.write_command(0x80)
+            GPIO.output(self.CE, GPIO.LOW)
+            GPIO.output(self.CLE, GPIO.HIGH)
+            GPIO.output(self.ALE, GPIO.LOW)
+            self._delay_ns(10)  # tCLS
+            
+            GPIO.output(self.WE, GPIO.LOW)
+            self._delay_ns(self.tWP)  # WE pulse width
+            self.write_data(0x80)
+            GPIO.output(self.WE, GPIO.HIGH)
+            self._delay_ns(self.tWH)  # WE high hold time
+            
+            GPIO.output(self.CLE, GPIO.LOW)
+            self._delay_ns(10)  # tCLH
             
             # [2] 주소 전송 (5 사이클)
             print("      -> 2. 주소 5바이트 전송")
@@ -815,23 +890,58 @@ class MT29F4G08ABADAWP:
             
             # [3] 데이터 전송
             print(f"      -> 3. 데이터 {len(data)}바이트 전송 시작")
-            self.set_data_pins_output()
+            
+            # 데이터 전송 전 상태 확인
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
             GPIO.output(self.ALE, GPIO.LOW)
+            self._delay_ns(self.tADL)  # Address to data loading time
             
-            for byte in data:
+            # 데이터 전송
+            for i, byte in enumerate(data):
                 GPIO.output(self.WE, GPIO.LOW)
-                self._delay_ns(12) # tWP
+                self._delay_ns(self.tWP)  # WE pulse width
                 self.write_data(byte)
                 GPIO.output(self.WE, GPIO.HIGH)
-                self._delay_ns(10) # tWH
-            self.write_command(0x10)
-            
-            self.wait_ready()
-            if not self.check_operation_status():
-                raise RuntimeError("페이지 쓰기 실패 (상태 확인)")
+                self._delay_ns(self.tWH)  # WE high hold time
                 
+                # 진행 상황 표시 (매 512바이트마다)
+                if i % 512 == 0 and i > 0:
+                    print(f"      -> 데이터 전송 진행: {i}/{len(data)} bytes")
+            
+            print("      -> 4. 데이터 전송 완료, 쓰기 확정 명령(10h) 전송")
+            
+            # [4] 쓰기 확정 명령 (10h) - 별도로 처리
+            GPIO.output(self.CLE, GPIO.HIGH)
+            GPIO.output(self.ALE, GPIO.LOW)
+            self._delay_ns(10)  # tCLS
+            
+            GPIO.output(self.WE, GPIO.LOW)
+            self._delay_ns(self.tWP)
+            self.write_data(0x10)
+            GPIO.output(self.WE, GPIO.HIGH)
+            self._delay_ns(self.tWH)
+            
+            GPIO.output(self.CLE, GPIO.LOW)
+            GPIO.output(self.CE, GPIO.HIGH)  # CE를 HIGH로 설정
+            
+            print("      -> 5. 프로그래밍 완료 대기 중...")
+            
+            # [5] tPROG_ECC 대기 - 더 긴 시간 대기
+            self.wait_ready()
+            
+            # 추가 안정화 시간
+            time.sleep(0.001)  # 1ms 추가 대기
+            
+            print("      -> 6. 상태 확인 중...")
+            
+            # [6] 상태 확인
+            if not self.check_operation_status():
+                self.mark_bad_block(block_no)
+                raise RuntimeError("페이지 쓰기 실패 (상태 확인)")
+            
+            print(f"    [쓰기 완료] Page {page_no} 성공")
+            
         except Exception as e:
             raise RuntimeError(f"페이지 쓰기 실패 (페이지 {page_no}): {str(e)}")
         finally:
