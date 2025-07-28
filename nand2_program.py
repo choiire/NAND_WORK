@@ -26,6 +26,118 @@ def validate_directory(dirpath: str) -> None:
     if not os.path.exists(dirpath) or not os.path.isdir(dirpath):
         raise NotADirectoryError(f"유효한 디렉토리가 아님: {dirpath}")
 
+def get_two_plane_pairs(total_blocks: int) -> tuple:
+    """전체 블록에서 Two-plane 삭제 가능한 블록 쌍을 생성합니다."""
+    pairs = []
+    
+    # 플레인별로 블록을 분류 (BA[6] 비트 기준)
+    plane0_blocks = []  # BA[6] = 0
+    plane1_blocks = []  # BA[6] = 1
+    
+    for block in range(total_blocks):
+        if (block >> 6) & 1 == 0:  # BA[6] = 0
+            plane0_blocks.append(block)
+        else:  # BA[6] = 1
+            plane1_blocks.append(block)
+    
+    # 각 플레인에서 동일한 인덱스의 블록들을 쌍으로 만들기
+    min_plane_size = min(len(plane0_blocks), len(plane1_blocks))
+    
+    for i in range(min_plane_size):
+        pairs.append((plane0_blocks[i], plane1_blocks[i]))
+    
+    # 남은 블록들은 단일 블록으로 처리
+    remaining_blocks = []
+    if len(plane0_blocks) > min_plane_size:
+        remaining_blocks.extend(plane0_blocks[min_plane_size:])
+    if len(plane1_blocks) > min_plane_size:
+        remaining_blocks.extend(plane1_blocks[min_plane_size:])
+    
+    return pairs, remaining_blocks
+
+def erase_all_blocks_fast(nand):
+    """검증 없이 모든 블록을 빠르게 초기화합니다 (Two-plane 기능 사용)"""
+    TOTAL_BLOCKS = 4096
+    PAGES_PER_BLOCK = 64
+    
+    try:
+        start_datetime = datetime.now()
+        print(f"=== 전체 블록 빠른 초기화 시작 (검증 없음) ===")
+        print(f"시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"총 블록 수: {TOTAL_BLOCKS}개")
+        print("주의: 이 과정은 모든 데이터를 삭제하며 검증하지 않습니다.")
+        
+        # Bad Block 테이블 초기화
+        nand.bad_blocks = set()
+        
+        successful_blocks_erase = []
+        failed_blocks_erase = []
+        
+        block_pairs, remaining_blocks = get_two_plane_pairs(TOTAL_BLOCKS)
+        
+        # 1. Two-plane으로 블록 쌍 삭제
+        print("Two-plane 블록 삭제 진행 중...")
+        for pair_idx, (block1, block2) in enumerate(block_pairs):
+            # 진행률 표시
+            if pair_idx % 100 == 0:
+                progress = (pair_idx + 1) / len(block_pairs) * 100
+                sys.stdout.write(f"\rTwo-plane 삭제 진행: {progress:.1f}% ({pair_idx+1}/{len(block_pairs)} 쌍)")
+                sys.stdout.flush()
+            
+            page1, page2 = block1 * PAGES_PER_BLOCK, block2 * PAGES_PER_BLOCK
+            try:
+                nand.erase_block_two_plane(page1, page2)
+                successful_blocks_erase.extend([block1, block2])
+            except Exception:
+                # Two-plane 실패 시 개별 삭제 시도
+                for b, p in [(block1, page1), (block2, page2)]:
+                    try:
+                        nand.erase_block(p)
+                        successful_blocks_erase.append(b)
+                    except Exception:
+                        failed_blocks_erase.append(b)
+        
+        print(f"\nTwo-plane 삭제 완료: {len(block_pairs)} 쌍 처리")
+        
+        # 2. 남은 단일 블록 삭제
+        if remaining_blocks:
+            print(f"남은 단일 블록 삭제 중... ({len(remaining_blocks)}개)")
+            for i, block in enumerate(remaining_blocks):
+                if i % 50 == 0:
+                    progress = (i + 1) / len(remaining_blocks) * 100
+                    sys.stdout.write(f"\r단일 블록 삭제 진행: {progress:.1f}%")
+                    sys.stdout.flush()
+                
+                try:
+                    nand.erase_block(block * PAGES_PER_BLOCK)
+                    successful_blocks_erase.append(block)
+                except Exception:
+                    failed_blocks_erase.append(block)
+            print(f"\n단일 블록 삭제 완료")
+        
+        # 실패한 블록들을 Bad Block으로 표시
+        for block in failed_blocks_erase:
+            nand.mark_bad_block(block)
+        
+        end_datetime = datetime.now()
+        duration = end_datetime - start_datetime
+        
+        print(f"=== 전체 블록 빠른 초기화 완료 ===")
+        print(f"완료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"소요 시간: {duration}")
+        print(f"성공적으로 삭제된 블록: {len(successful_blocks_erase)}개")
+        print(f"삭제 실패 블록 (Bad Block): {len(failed_blocks_erase)}개")
+        if failed_blocks_erase:
+            print(f"Bad Block 목록: {sorted(failed_blocks_erase)[:10]}")
+            if len(failed_blocks_erase) > 10:
+                print(f"... 및 {len(failed_blocks_erase) - 10}개 더")
+        
+        return len(failed_blocks_erase) == 0
+        
+    except Exception as e:
+        print(f"\n전체 블록 초기화 중 오류 발생: {str(e)}")
+        return False
+
 def program_page_only(nand, page_no: int, write_data: bytes, max_retries: int = 5) -> bool:
     """페이지 쓰기 수행 (Bad Block 로직 제거)"""
     for retry in range(max_retries):
@@ -95,11 +207,20 @@ def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict
                     
     return results
 
-def program_nand():
+def program_nand(initialize_blocks: bool = False):
     """NAND 플래시 프로그래밍 (메모리 최적화 및 최종 수정)"""
     try:
         print("NAND 플래시 드라이버 초기화 중...")
         nand = MT29F4G08ABADAWP()
+        
+        # 전체 블록 초기화 옵션
+        if initialize_blocks:
+            print("\n전체 블록 초기화를 시작합니다...")
+            init_success = erase_all_blocks_fast(nand)
+            if not init_success:
+                print("경고: 일부 블록 초기화에 실패했지만 프로그래밍을 계속합니다.")
+            else:
+                print("전체 블록 초기화가 성공적으로 완료되었습니다.")
         
         splits_dir = "output_splits"
         validate_directory(splits_dir)
@@ -118,13 +239,13 @@ def program_nand():
         start_datetime = datetime.now()
         error_log_filename = f"program_errors_{start_datetime.strftime('%Y%m%d_%H%M%S')}.txt"
         
-        print(f"\n{'='*60}")
+        print(f"\n{'.='*60}")
         print(f" NAND 플래시 프로그래밍 시작 (Bad Block 없음 가정)")
-        print(f"{'='*60}")
+        print(f"{'.='*60}")
         print(f"시작 시간: {start_datetime.strftime('%Y-%m-%d %H%M:%S')}")
         print(f"총 파일 수: {total_files}개")
         print(f"오류 로그: {error_log_filename}")
-        print("=" * 60)
+        print(".=" * 60)
         
         total_pages_to_process = 0
         successful_pages_count = 0
@@ -191,9 +312,7 @@ def program_nand():
         
         failed_pages_count = len(failed_files_info)
 
-        print(f"\n\n{'.='*60}")
         print(f".=== NAND 플래시 프로그래밍 완료 ===")
-        print(f"{'.='*60}")
         print(f"완료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"소요 시간: {duration}")
         print(f"\n총 처리 시도 페이지 수: {total_pages_to_process}")
@@ -205,9 +324,7 @@ def program_nand():
             with open(error_log_filename, 'w', encoding='utf-8') as f:
                 for info in failed_files_info:
                     f.write(f"File: {info['file']}, Reason: {info['reason']}\n")
-        
-        print(".=" * 60)
-        
+                
         return len(failed_files_info) == 0
             
     except Exception as e:
@@ -220,5 +337,5 @@ def program_nand():
 
 
 if __name__ == "__main__":
-    success = program_nand()
+    success = program_nand(initialize_blocks=True)
     sys.exit(0 if success else 1)
