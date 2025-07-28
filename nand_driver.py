@@ -570,8 +570,9 @@ class MT29F4G08ABADAWP:
             elif status == "CORRECTED_WITH_REWRITE_RECOMMENDED":
                 print(f"정보: 페이지 {page_no}에서 ECC 오류가 수정되었으나, 해당 블록을 재기록(refresh)하는 것을 권장합니다.")
 
-            # [5] (오류 수정된) 데이터 읽기 - 개선된 버전
+            # [5] (오류 수정된) 데이터 읽기
             self.set_data_pins_input()
+            self._delay_ns(200)
             GPIO.output(self.CE, GPIO.LOW)
             self._delay_ns(50)  # CE# setup time
             
@@ -585,9 +586,10 @@ class MT29F4G08ABADAWP:
                 read_bytes.append(byte_data)
                 
                 # 매 256바이트마다 짧은 대기 (안정성 향상)
-                if (i + 1) % 256 == 0:
-                    self._delay_ns(1000)  # 1us 대기
-            
+                #if (i + 1) % 256 == 0:
+                #    self._delay_ns(1000)  # 1us 대기
+                self._delay_ns(50)
+
             GPIO.output(self.CE, GPIO.HIGH)
             # 읽기 후에는 finally 블록에서 출력 모드로 자동 복원됨
                 
@@ -912,8 +914,9 @@ class MT29F4G08ABADAWP:
                 self._delay_ns(self.tWH) # WE# high hold time
                 
                 # 매 256바이트마다 짧은 대기 (버퍼링 고려)
-                if (byte_idx + 1) % 256 == 0:
-                    self._delay_ns(1000)  # 1us 대기
+                #if (byte_idx + 1) % 256 == 0:
+                #    self._delay_ns(1000)  # 1us 대기
+                self._delay_ns(50)
                 
             # [4] 쓰기 확정 명령 (10h)
             self.write_command(0x10)
