@@ -381,7 +381,7 @@ class MT29F4G08ABADAWP:
             GPIO.output(self.CE, GPIO.LOW)
             GPIO.output(self.CLE, GPIO.LOW)
             GPIO.output(self.ALE, GPIO.LOW)
-
+            self.set_data_pins_output() # 데이터 핀을 출력으로 설정
             for p in params:
                 GPIO.output(self.WE, GPIO.LOW)
                 self._delay_ns(self.tWP)
@@ -389,7 +389,8 @@ class MT29F4G08ABADAWP:
                 GPIO.output(self.WE, GPIO.HIGH)
                 self._delay_ns(self.tWH)
             
-            self.wait_ready()
+            self.wait_ready() # tFEAT 시간 대기
+            time.sleep(0.001) # 명령이 완전히 처리될 시간을 보장
             print("내부 ECC 엔진이 성공적으로 비활성화되었습니다.")
 
         except Exception as e:
