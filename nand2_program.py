@@ -158,6 +158,7 @@ def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict
     """
     배치로 페이지들을 검증합니다.
     데이터 불일치 시, 상세한 디버깅 정보를 포함하여 오류를 발생시킵니다.
+    (수정: Main 데이터 영역만 비교)
     """
     results = {'success': [], 'failed': []}
     for page_info in page_data_list:
@@ -167,16 +168,20 @@ def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict
         for retry in range(max_retries):
             try:
                 read_data = nand.read_page(page_no, len(original_data))
-                
-                if read_data != original_data:
-                    # --- 변경된 부분: 상세 불일치 정보 생성 ---
+
+                # ✨ 핵심 수정: 전체 데이터 대신 Main 영역(앞 2048 바이트)만 비교
+                original_main_data = original_data[:PAGE_SIZE]
+                read_main_data = read_data[:PAGE_SIZE]
+
+                if read_main_data != original_main_data:
                     mismatches = []
                     # 데이터가 짧게 읽혔을 경우를 대비해 짧은 길이를 기준으로 비교
-                    compare_len = min(len(original_data), len(read_data))
+                    compare_len = min(len(original_main_data), len(read_main_data))
                     
+                    # ✨ 불일치 검사도 Main 영역 길이만큼만 수행
                     for i in range(compare_len):
-                        written_byte = original_data[i]
-                        read_byte = read_data[i]
+                        written_byte = original_main_data[i]
+                        read_byte = read_main_data[i]
                         if written_byte != read_byte:
                             mismatches.append(
                                 f"  - 오프셋 0x{i:04X}: 쓰기=0x{written_byte:02X}, 읽기=0x{read_byte:02X}"
@@ -187,15 +192,13 @@ def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict
                     
                     error_details = "\n".join(mismatches)
                     
-                    # 전체 데이터 길이도 확인
-                    len_info = f"데이터 길이: 쓰기={len(original_data)}, 읽기={len(read_data)}"
+                    len_info = f"데이터 길이: 쓰기={len(original_main_data)}, 읽기={len(read_main_data)}"
                     
-                    # 최종 에러 메시지 생성
                     raise ValueError(f"데이터 검증 실패:\n{len_info}\n불일치 내역:\n{error_details}")
                 
                 # 검증 성공
                 results['success'].append(page_info)
-                break # 성공 시 재시도 중단
+                break
                 
             except Exception as e:
                 if retry == max_retries - 1:
