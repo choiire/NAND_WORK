@@ -10,26 +10,26 @@ class MT29F4G08ABADAWP:
     
     # 타이밍 상수 (ns) - 데이터시트의 Max/Min 값과 충분한 여유를 고려하여 재조정
     # 라즈베리 파이 Python GPIO 제어의 비결정성(non-determinism)을 감안하여 더 큰 값으로 설정
-    tWB = 200     # WE# high to R/B# low (데이터시트 Max 100ns -> 200ns)
-    tR_ECC = 70000  # Data Transfer from Cell to Register (데이터시트 Max 70us -> 70000ns)
-    tRR = 50      # RE# low to RE# high (데이터시트 Min 20ns -> 50ns, Read Cycle Time tRC Min 20ns 고려)
-    tWC = 50      # Write Cycle Time (데이터시트 Min 20ns -> 50ns)
-    tWP = 20      # WE# pulse width (데이터시트 Min 10ns -> 20ns)
-    tWH = 20      # WE# high hold time (데이터시트 Min 7ns -> 20ns)
-    tADL = 100    # ALE to data loading time (데이터시트 Min 70ns -> 100ns)
-    tREA = 30     # RE# access time (데이터시트 Max 16ns -> 30ns)
-    tREH = 20     # RE# high hold time (데이터시트 Min 7ns -> 20ns)
-    tWHR = 100    # WE# high to RE# low (데이터시트 Min 60ns -> 100ns)
-    tCLS = 20     # CLE setup time (데이터시트 Min 10ns -> 20ns)
-    tCLH = 10     # CLE hold time (데이터시트 Min 5ns -> 10ns)
-    tALS = 20     # ALE setup time (데이터시트 Min 10ns -> 20ns)
-    tALH = 10     # ALE hold time (데이터시트 Min 5ns -> 10ns)
+    tWB = 200*100     # WE# high to R/B# low (데이터시트 Max 100ns -> 200ns)
+    tR_ECC = 70000*100  # Data Transfer from Cell to Register (데이터시트 Max 70us -> 70000ns)
+    tRR = 50*100      # RE# low to RE# high (데이터시트 Min 20ns -> 50ns, Read Cycle Time tRC Min 20ns 고려)
+    tWC = 50*100      # Write Cycle Time (데이터시트 Min 20ns -> 50ns)
+    tWP = 20*100      # WE# pulse width (데이터시트 Min 10ns -> 20ns)
+    tWH = 20*100      # WE# high hold time (데이터시트 Min 7ns -> 20ns)
+    tADL = 100*100    # ALE to data loading time (데이터시트 Min 70ns -> 100ns)
+    tREA = 30*100     # RE# access time (데이터시트 Max 16ns -> 30ns)
+    tREH = 20*100     # RE# high hold time (데이터시트 Min 7ns -> 20ns)
+    tWHR = 100*100    # WE# high to RE# low (데이터시트 Min 60ns -> 100ns)
+    tCLS = 20*100     # CLE setup time (데이터시트 Min 10ns -> 20ns)
+    tCLH = 10*100     # CLE hold time (데이터시트 Min 5ns -> 10ns)
+    tALS = 20*100     # ALE setup time (데이터시트 Min 10ns -> 20ns)
+    tALH = 10*100     # ALE hold time (데이터시트 Min 5ns -> 10ns)
     
     # 새로 추가된/조정된 타이밍 상수
     # tDS (Data setup time): 데이터시트 3.3V Min 7ns, 1.8V Min 10ns. 여유롭게 20ns. 
-    tDS = 20      
+    tDS = 20*100      
     # tDH (Data hold time): 데이터시트 3.3V Min 5ns, 1.8V Min 5ns. 여유롭게 10ns. 
-    tDH = 10
+    tDH = 10*100
 
     def __init__(self, skip_bad_block_scan=False):
         # GPIO 핀 설정
@@ -251,7 +251,7 @@ class MT29F4G08ABADAWP:
     def set_data_pins_input(self):
         """데이터 핀을 입력 모드로 설정"""
         for pin in self.IO_pins:
-            GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            GPIO.setup(pin, GPIO.IN)
         self._delay_ns(200)  # 100ns -> 200ns 대기
             
     def write_data(self, data):
