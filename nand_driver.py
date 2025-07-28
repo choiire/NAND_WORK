@@ -8,21 +8,22 @@ class MT29F4G08ABADAWP:
     PAGES_PER_BLOCK = 64
     TOTAL_BLOCKS = 4096
     
-    # 타이밍 상수 (ns) - 더 보수적인 값으로 조정
-    tWB = 200   # WE# high to R/B# low (100ns -> 200ns)
-    tR = 25000  # Data Transfer from Cell to Register (25us -> 30us)
-    tRR = 20    # RE# low to RE# high (20ns -> 30ns)
-    tWC = 20    # Write Cycle Time (25ns -> 35ns)
-    tWP = 10    # WE# pulse width (10ns -> 15ns)
-    tWH = 7    # WE# high hold time (10ns -> 15ns)
-    tADL = 70   # ALE to data loading time (70ns -> 100ns)
-    tREA = 16   # RE# access time (20ns -> 30ns)
-    tREH = 7   # RE# high hold time (10ns -> 15ns)
-    tWHR = 60   # WE# high to RE# low (60ns -> 80ns)
-    tCLS = 10   # CLE setup time
-    tCLH = 5   # CLE hold time
-    tALS = 10   # ALE setup time
-    tALH = 5   # ALE hold time
+    # 타이밍 상수 (ns) - 데이터시트의 Max/Min 값과 충분한 여유를 고려하여 재조정
+    # 라즈베리 파이 Python GPIO 제어의 비결정성(non-determinism)을 감안하여 더 큰 값으로 설정
+    tWB = 200     # WE# high to R/B# low (데이터시트 Max 100ns -> 200ns)
+    tR_ECC = 70000  # Data Transfer from Cell to Register (데이터시트 Max 70us -> 70000ns)
+    tRR = 50      # RE# low to RE# high (데이터시트 Min 20ns -> 50ns, Read Cycle Time tRC Min 20ns 고려)
+    tWC = 50      # Write Cycle Time (데이터시트 Min 20ns -> 50ns)
+    tWP = 20      # WE# pulse width (데이터시트 Min 10ns -> 20ns)
+    tWH = 20      # WE# high hold time (데이터시트 Min 7ns -> 20ns)
+    tADL = 100    # ALE to data loading time (데이터시트 Min 70ns -> 100ns)
+    tREA = 30     # RE# access time (데이터시트 Max 16ns -> 30ns)
+    tREH = 20     # RE# high hold time (데이터시트 Min 7ns -> 20ns)
+    tWHR = 100    # WE# high to RE# low (데이터시트 Min 60ns -> 100ns)
+    tCLS = 20     # CLE setup time (데이터시트 Min 10ns -> 20ns)
+    tCLH = 10     # CLE hold time (데이터시트 Min 5ns -> 10ns)
+    tALS = 20     # ALE setup time (데이터시트 Min 10ns -> 20ns)
+    tALH = 10     # ALE hold time (데이터시트 Min 5ns -> 10ns)
     
     def __init__(self, skip_bad_block_scan=False):
         # GPIO 핀 설정
