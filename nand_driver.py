@@ -68,7 +68,8 @@ class MT29F4G08ABADAWP:
             self.power_on_sequence()
 
             # 내부 ECC 엔진 활성화
-            self.enable_internal_ecc()
+            #self.enable_internal_ecc()
+            self.disable_internal_ecc()
             
         except Exception as e:
             GPIO.cleanup()
@@ -362,6 +363,37 @@ class MT29F4G08ABADAWP:
 
         except Exception as e:
             raise RuntimeError(f"내부 ECC 활성화 실패: {str(e)}")
+        finally:
+            self.reset_pins()
+    
+    def disable_internal_ecc(self):
+        """데이터시트 사양에 따라 칩의 내장 ECC 엔진을 비활성화합니다."""
+        try:
+            print("내부 ECC 엔진 비활성화 시도...")
+            # SET FEATURES (EFh) 명령
+            self.write_command(0xEF)
+
+            # Feature Address (90h) 전송
+            self.write_address(0x90)
+
+            # Parameters (P1=00h for ECC Disable, P2-P4=00h) 전송 [cite: 1520, 1531]
+            params = [0x00, 0x00, 0x00, 0x00]
+            GPIO.output(self.CE, GPIO.LOW)
+            GPIO.output(self.CLE, GPIO.LOW)
+            GPIO.output(self.ALE, GPIO.LOW)
+
+            for p in params:
+                GPIO.output(self.WE, GPIO.LOW)
+                self._delay_ns(self.tWP)
+                self.write_data(p)
+                GPIO.output(self.WE, GPIO.HIGH)
+                self._delay_ns(self.tWH)
+            
+            self.wait_ready()
+            print("내부 ECC 엔진이 성공적으로 비활성화되었습니다.")
+
+        except Exception as e:
+            raise RuntimeError(f"내부 ECC 비활성화 실패: {str(e)}")
         finally:
             self.reset_pins()
 
@@ -917,7 +949,7 @@ class MT29F4G08ABADAWP:
                 #if (byte_idx + 1) % 256 == 0:
                 #    self._delay_ns(1000)  # 1us 대기
                 self._delay_ns(50)
-                
+
             # [4] 쓰기 확정 명령 (10h)
             self.write_command(0x10)
             

@@ -6,7 +6,7 @@ import time
 
 # --- 새로운 상수 정의 ---
 FULL_PAGE_SIZE = MT29F4G08ABADAWP.PAGE_SIZE + MT29F4G08ABADAWP.SPARE_SIZE # 2112 바이트
-PAGE_SIZE = MT29F4G08ABADAWP.PAGE_SIZE
+#PAGE_SIZE = MT29F4G08ABADAWP.PAGE_SIZE
 
 def hex_to_int(hex_str: str) -> int:
     """16진수 문자열을 정수로 변환"""
@@ -157,7 +157,7 @@ def program_page_only(nand, page_no: int, write_data: bytes, max_retries: int = 
 
 def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict:
     """
-    배치로 페이지들을 검증합니다. (수정: Main 데이터 영역만 비교)
+    배치로 페이지들을 검증합니다. (수정: 페이지 전체 비교로 복원)
     """
     results = {'success': [], 'failed': []}
     for page_info in page_data_list:
@@ -166,19 +166,18 @@ def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict
         
         for retry in range(max_retries):
             try:
+                # 페이지 전체를 읽어옵니다.
                 read_data = nand.read_page(page_no, len(original_data))
                 
-                # 핵심 수정: 전체 데이터 대신 Main 영역(앞 2048 바이트)만 비교
-                original_main_data = original_data[:PAGE_SIZE]
-                read_main_data = read_data[:PAGE_SIZE]
-
-                if read_main_data != original_main_data:
+                # ✨ 핵심 수정: 다시 페이지 전체를 비교합니다.
+                if read_data != original_data:
                     mismatches = []
-                    compare_len = min(len(original_main_data), len(read_main_data))
+                    compare_len = min(len(original_data), len(read_data))
                     
+                    # ✨ 불일치 검사도 전체 길이에 대해 수행합니다.
                     for i in range(compare_len):
-                        written_byte = original_main_data[i]
-                        read_byte = read_main_data[i]
+                        written_byte = original_data[i]
+                        read_byte = read_data[i]
                         if written_byte != read_byte:
                             mismatches.append(
                                 f"  - 오프셋 0x{i:04X}: 쓰기=0x{written_byte:02X}, 읽기=0x{read_byte:02X}"
@@ -188,7 +187,7 @@ def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict
                                 break
                     
                     error_details = "\n".join(mismatches)
-                    len_info = f"데이터 길이: 쓰기={len(original_main_data)}, 읽기={len(read_main_data)}"
+                    len_info = f"데이터 길이: 쓰기={len(original_data)}, 읽기={len(read_data)}"
                     raise ValueError(f"데이터 검증 실패:\n{len_info}\n불일치 내역:\n{error_details}")
                 
                 results['success'].append(page_info)
