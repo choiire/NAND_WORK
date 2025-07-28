@@ -965,3 +965,42 @@ class MT29F4G08ABADAWP:
             raise RuntimeError(f"페이지 쓰기 실패 (페이지 {page_no}): {str(e)}")
         finally:
             self.reset_pins()
+    
+    def check_ecc_status(self):
+        """GET FEATURES(EEh) 명령을 사용해 칩의 현재 ECC 설정 상태를 읽고 출력합니다."""
+        print("-" * 20)
+        print("칩의 현재 ECC 상태를 확인합니다...")
+        try:
+            # GET FEATURES (EEh) 명령
+            self.write_command(0xEE)
+            # Feature Address (90h for Array operation mode)
+            self.write_address(0x90)
+
+            # 칩이 준비될 때까지 대기 (tFEAT)
+            self.wait_ready(timeout_ms=1) 
+
+            # 결과 파라미터 읽기
+            self.set_data_pins_input()
+            GPIO.output(self.CE, GPIO.LOW)
+            
+            params = []
+            for _ in range(4):
+                GPIO.output(self.RE, GPIO.LOW)
+                self._delay_ns(self.tREA)
+                byte_data = self.read_data()
+                GPIO.output(self.RE, GPIO.HIGH)
+                self._delay_ns(self.tREH)
+                params.append(byte_data)
+            
+            p1 = params[0]
+            # 데이터시트에 따르면 P1의 3번 비트가 ECC 활성화 여부를 나타냄
+            if (p1 >> 3) & 0x01:
+                print(">>> 내장 ECC 상태: 활성화됨 (Enabled)")
+            else:
+                print(">>> 내장 ECC 상태: 비활성화됨 (Disabled)")
+            print("-" * 20)
+
+        except Exception as e:
+            print(f"ECC 상태 확인 중 오류 발생: {e}")
+        finally:
+            self.reset_pins()

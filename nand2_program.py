@@ -218,6 +218,8 @@ def program_nand(initialize_blocks: bool = False):
             else:
                 print("전체 블록 초기화가 성공적으로 완료되었습니다.")
         
+        nand.check_ecc_status()
+
         splits_dir = "output_splits"
         validate_directory(splits_dir)
         
