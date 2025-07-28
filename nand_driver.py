@@ -10,19 +10,19 @@ class MT29F4G08ABADAWP:
     
     # 타이밍 상수 (ns) - 더 보수적인 값으로 조정
     tWB = 200   # WE# high to R/B# low (100ns -> 200ns)
-    tR = 30000  # Data Transfer from Cell to Register (25us -> 30us)
-    tRR = 30    # RE# low to RE# high (20ns -> 30ns)
-    tWC = 35    # Write Cycle Time (25ns -> 35ns)
-    tWP = 15    # WE# pulse width (10ns -> 15ns)
-    tWH = 15    # WE# high hold time (10ns -> 15ns)
-    tADL = 100   # ALE to data loading time (70ns -> 100ns)
-    tREA = 30   # RE# access time (20ns -> 30ns)
-    tREH = 15   # RE# high hold time (10ns -> 15ns)
-    tWHR = 80   # WE# high to RE# low (60ns -> 80ns)
-    tCLS = 15   # CLE setup time
-    tCLH = 10   # CLE hold time
-    tALS = 15   # ALE setup time
-    tALH = 10   # ALE hold time
+    tR = 25000  # Data Transfer from Cell to Register (25us -> 30us)
+    tRR = 20    # RE# low to RE# high (20ns -> 30ns)
+    tWC = 20    # Write Cycle Time (25ns -> 35ns)
+    tWP = 10    # WE# pulse width (10ns -> 15ns)
+    tWH = 7    # WE# high hold time (10ns -> 15ns)
+    tADL = 70   # ALE to data loading time (70ns -> 100ns)
+    tREA = 16   # RE# access time (20ns -> 30ns)
+    tREH = 7   # RE# high hold time (10ns -> 15ns)
+    tWHR = 60   # WE# high to RE# low (60ns -> 80ns)
+    tCLS = 10   # CLE setup time
+    tCLH = 5   # CLE hold time
+    tALS = 10   # ALE setup time
+    tALH = 5   # ALE hold time
     
     def __init__(self, skip_bad_block_scan=False):
         # GPIO 핀 설정
