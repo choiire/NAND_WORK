@@ -282,9 +282,6 @@ def program_nand(initialize_blocks: bool = False):
             sys.stdout.write(f"\r파일 {file_index + 1}/{total_files}: {filename} 처리 중...")
             sys.stdout.flush()
             
-            # 디버그: 실제 처리 중인 파일 정보 출력
-            print(f"\n[DEBUG] 실제 처리 파일: {filename}")
-            
             try:
                 filepath = os.path.join(splits_dir, filename)
                 
@@ -306,8 +303,6 @@ def program_nand(initialize_blocks: bool = False):
 
                 start_address = hex_to_int(filename.split('.')[0])
                 page_no = start_address // FULL_PAGE_SIZE
-                
-                print(f"[DEBUG] 파일명: {filename}, 주소: 0x{start_address:08X}, 페이지: {page_no}")
 
                 total_pages_to_process += 1
                 
