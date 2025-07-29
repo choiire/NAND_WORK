@@ -11,6 +11,7 @@ NAND 블록 초기화 및 첫 번째 블록의 첫 페이지 데이터 읽기 �
 
 import sys
 import time
+import os
 from datetime import datetime
 from nand_driver import MT29F4G08ABADAWP
 
@@ -99,11 +100,53 @@ def verify_block_erased(nand: MT29F4G08ABADAWP, block_no: int) -> bool:
         print(f"❌ 블록 {block_no} 검증 중 오류: {str(e)}")
         return False
 
+def load_bin_file(file_path: str) -> bytes:
+    """bin 파일을 읽어서 바이트 데이터로 반환합니다."""
+    try:
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        print(f"✅ 파일 로드 완료: {file_path}")
+        print(f"📊 파일 크기: {len(data)} 바이트")
+        return data
+    except FileNotFoundError:
+        raise FileNotFoundError(f"파일을 찾을 수 없습니다: {file_path}")
+    except Exception as e:
+        raise Exception(f"파일 읽기 오류: {str(e)}")
+
+def compare_data(original: bytes, read_back: bytes) -> dict:
+    """원본 데이터와 읽어온 데이터를 비교합니다."""
+    result = {
+        'identical': True,
+        'differences': [],
+        'original_size': len(original),
+        'read_size': len(read_back)
+    }
+    
+    if len(original) != len(read_back):
+        result['identical'] = False
+        result['size_mismatch'] = True
+        return result
+    
+    differences = []
+    for i, (orig, read) in enumerate(zip(original, read_back)):
+        if orig != read:
+            differences.append({
+                'offset': i,
+                'original': orig,
+                'read_back': read
+            })
+            result['identical'] = False
+    
+    result['differences'] = differences[:10]  # 최대 10개만 저장
+    result['total_differences'] = len(differences)
+    
+    return result
+
 def main():
     """메인 실행 함수"""
-    print("=" * 70)
-    print("NAND 블록 초기화 및 첫 페이지 데이터 읽기 프로그램")
-    print("=" * 70)
+    print("=" * 80)
+    print("NAND 블록 초기화, 파일 쓰기 및 데이터 검증 프로그램")
+    print("=" * 80)
     
     # NAND 드라이버 초기화
     print("\n🔧 NAND 드라이버 초기화 중...")
@@ -131,6 +174,36 @@ def main():
         if not verify_block_erased(nand, block_no):
             print("⚠️  블록 삭제 검증에 실패했지만 계속 진행합니다...")
         
+        # 00000000.bin 파일 로드 및 쓰기
+        bin_file_path = os.path.join("output_splits", "00000000.bin")
+        print(f"\n📂 파일 로드 중: {bin_file_path}")
+        
+        try:
+            original_data = load_bin_file(bin_file_path)
+            
+            # 데이터 크기 확인 및 조정
+            if len(original_data) > 2048:
+                print(f"⚠️  파일 크기가 2048바이트를 초과합니다. 처음 2048바이트만 사용합니다.")
+                write_data = original_data[:2048]
+            elif len(original_data) < 2048:
+                print(f"📝 파일 크기가 2048바이트보다 작습니다. 0xFF로 패딩합니다.")
+                write_data = original_data + b'\xFF' * (2048 - len(original_data))
+            else:
+                write_data = original_data
+            
+            # NAND에 데이터 쓰기
+            print(f"\n✍️  블록 {block_no}의 첫 페이지에 데이터 쓰기 중...")
+            start_time = time.time()
+            nand.write_page(first_page, write_data)
+            write_time = time.time() - start_time
+            print(f"✅ 데이터 쓰기 완료 (소요 시간: {write_time:.3f}초)")
+            
+        except Exception as e:
+            print(f"❌ 파일 로드 또는 쓰기 실패: {str(e)}")
+            print("📖 삭제된 상태의 페이지를 읽어서 표시합니다...")
+            original_data = None
+            write_data = None
+        
         # 첫 페이지 데이터 읽기
         print(f"\n📖 블록 {block_no}의 첫 페이지 (페이지 {first_page}) 데이터 읽기 중...")
         
@@ -142,27 +215,42 @@ def main():
         print(f"✅ 페이지 데이터 읽기 완료 (소요 시간: {read_time:.3f}초)")
         print(f"📊 읽은 데이터 크기: {len(page_data)} 바이트 (메인 영역: 2048, 스페어 영역: 64)")
         
-        # 16진수 출력
+        # 데이터 검증 (원본 파일과 비교)
+        if original_data is not None and write_data is not None:
+            print(f"\n🔍 데이터 검증 중...")
+            read_main_area = page_data[:2048]
+            comparison = compare_data(write_data, read_main_area)
+            
+            if comparison['identical']:
+                print("✅ 데이터 검증 성공: 쓴 데이터와 읽은 데이터가 일치합니다!")
+            else:
+                print(f"❌ 데이터 검증 실패: {comparison['total_differences']}개의 차이점 발견")
+                if comparison.get('size_mismatch'):
+                    print(f"   크기 불일치: 원본 {comparison['original_size']}, 읽음 {comparison['read_size']}")
+                else:
+                    print("   첫 10개 차이점:")
+                    for diff in comparison['differences']:
+                        print(f"     오프셋 0x{diff['offset']:04X}: 원본=0x{diff['original']:02X}, 읽음=0x{diff['read_back']:02X}")
+                    if comparison['total_differences'] > 10:
+                        print(f"     ... 및 {comparison['total_differences'] - 10}개 더")
+        
+        # 16진수 출력 (메인과 스페어 영역 통합)
         print(f"\n" + "=" * 80)
         print(f"블록 {block_no}, 페이지 {first_page} 데이터 (16진수 출력) - 전체 2112 바이트")
         print("=" * 80)
         print("주소     : 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  |ASCII 문자|")
         print("-" * 80)
         
-        # 메인 영역과 스페어 영역을 구분해서 표시
-        main_area = page_data[:2048]
-        spare_area = page_data[2048:2112]
+        # 전체 데이터를 통합해서 표시
+        hex_output_full = format_hex_output(page_data)
+        print(hex_output_full)
         
-        print("🔵 메인 영역 (0x000000 - 0x0007FF, 2048 바이트):")
-        print("-" * 60)
-        hex_output_main = format_hex_output(main_area)
-        print(hex_output_main)
-        
-        print(f"\n🟡 스페어 영역 (0x000800 - 0x00083F, 64 바이트):")
-        print("-" * 60)
-        # 스페어 영역은 오프셋을 2048부터 시작하도록 조정
-        hex_output_spare = format_hex_output_with_offset(spare_area, offset=2048)
-        print(hex_output_spare)
+        # 영역 구분선 표시
+        print(f"\n{'='*80}")
+        print("📋 영역 구분 정보:")
+        print(f"🔵 메인 영역: 0x000000 - 0x0007FF (2048 바이트)")
+        print(f"🟡 스페어 영역: 0x000800 - 0x00083F (64 바이트)")
+        print("="*80)
         
         # 데이터 통계
         print("\n" + "=" * 80)
