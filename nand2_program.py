@@ -214,8 +214,7 @@ def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict
                     raise ValueError(f"데이터 검증 실패:\n{len_info}\n{ecc_info}\n불일치 내역:\n{error_details}")
                 
                 results['success'].append(page_info)
-                if ecc_skipped_count > 0:
-                    print(f"    검증 완료 (ECC 영역 {ecc_skipped_count}바이트 제외): Page {page_no}")
+                # 성공 메시지 제거 - 더 이상 출력하지 않음
                 break
                 
             except Exception as e:
@@ -314,14 +313,23 @@ def program_nand(initialize_blocks: bool = False):
             
             written_pages_for_verify = []
             print("  [1단계] 쓰기 작업 진행...")
+            
+            # 현재 처리 중인 파일을 추적하기 위한 변수
+            current_processing_file = None
+            
             for page_info in batch_pages_to_write:
+                # 새로운 파일이 시작될 때만 파일명 출력
+                if current_processing_file != page_info['filename']:
+                    current_processing_file = page_info['filename']
+                    print(f"    처리 중: {current_processing_file}")
+                
                 try:
                     if program_page_only(nand, page_info['page_no'], page_info['data'], MAX_RETRIES):
                         written_pages_for_verify.append(page_info)
-                        print(f"    쓰기 완료: Page {page_info['page_no']} (from {page_info['filename']})")
+                        # 성공 메시지 제거 - 더 이상 출력하지 않음
                 except Exception as e:
                     failed_files_info.append({'file': page_info['filename'], 'reason': str(e)})
-                    print(f"    쓰기 실패: Page {page_info['page_no']} - {e}")
+                    print(f"    쓰기 실패: Page {page_info['page_no']} (파일: {page_info['filename']}) - {e}")
 
             if written_pages_for_verify:
                 print(f"  [2단계] 검증 작업 진행 ({len(written_pages_for_verify)}개 페이지)...")
@@ -332,7 +340,7 @@ def program_nand(initialize_blocks: bool = False):
 
                 for failed_info in verification_results['failed']:
                     failed_files_info.append({'file': failed_info['filename'], 'reason': failed_info['error']})
-                    print(f"    검증 실패: Page {failed_info['page_no']} (from {failed_info['filename']})")
+                    print(f"    검증 실패: Page {failed_info['page_no']} (파일: {failed_info['filename']})")
         
         end_datetime = datetime.now()
         duration = end_datetime - start_datetime
