@@ -1025,31 +1025,29 @@ class MT29F4G08ABADAWP:
     def _write_full_address(self, page_no: int, col_addr: int = 0):
         """
         데이터시트(Table 2) 사양에 맞게 5바이트 전체 주소(컬럼+로우)를 조합하여 전송합니다.
-        (수정된 물리 주소 계산 방식)
+        (물리 주소 계산 최종 수정)
         """
         # 1. 페이지 번호로부터 블록 내 페이지 오프셋과 블록 번호를 계산합니다.
-        page_in_block = page_no % self.PAGES_PER_BLOCK  # PA[5:0] (0-63)
-        block_no = page_no // self.PAGES_PER_BLOCK      # BA[11:0] (0-4095)
+        page_in_block = page_no % self.PAGES_PER_BLOCK      # PA[5:0] (0-63)
+        block_no = page_no // self.PAGES_PER_BLOCK          # BA[11:0] (0-4095)
 
         # 2. 데이터시트의 5-Cycle Address 규격에 맞춰 5바이트 주소를 생성합니다.
         addresses = [0] * 5
 
-        # Cycle 1: Column Address Lower Byte (CA[7:0])
+        # Cycle 1 & 2: Column Address (12비트) [cite: 678]
         addresses[0] = col_addr & 0xFF
-        
-        # Cycle 2: Column Address Upper Byte (CA[11:8])
         addresses[1] = (col_addr >> 8) & 0x0F
-        
-        # Cycle 3: {BA[7], BA[6], PA[5], PA[4], PA[3], PA[2], PA[1], PA[0]}
-        addresses[2] = page_in_block | ((block_no << 2) & 0xC0)
 
-        # Cycle 4: {BA[15], BA[14], BA[13], BA[12], BA[11], BA[10], BA[9], BA[8]}
-        # 4Gb 칩은 BA[11:0]까지 사용하므로 BA[15:12]는 0이 됩니다.
-        addresses[3] = (block_no >> 6) & 0xFF 
-        
-        # Cycle 5: {LOW, ..., LOW, BA[17], BA[16]}
-        # 4Gb 칩은 BA[17:16]을 사용하지 않으므로 이 바이트는 0입니다.
-        addresses[4] = (block_no >> 14) & 0x03
+        # Cycle 3: {BA[7], BA[6], PA[5:0]} [cite: 678]
+        # 데이터시트상 BA[5:0]은 명시되어 있지 않지만, 다른 BA비트와 함께 PA가 조합됩니다.
+        # Erase에서는 PA[5:0]이 무시됩니다.
+        addresses[2] = (page_in_block & 0x3F) | (block_no & 0xC0)
+
+        # Cycle 4: {BA[15:8]} -> 4Gb 칩에서는 BA[11:8] [cite: 678]
+        addresses[3] = (block_no >> 8) & 0x0F
+
+        # Cycle 5: {BA[17:16]} -> 4Gb 칩에서는 사용 안함 [cite: 678]
+        addresses[4] = 0x00
 
         # 3. 생성된 5바이트 주소를 전송합니다.
         GPIO.output(self.CE, GPIO.LOW)
@@ -1072,20 +1070,20 @@ class MT29F4G08ABADAWP:
     def _write_row_address(self, page_no: int):
         """
         데이터시트(Table 2) 사양에 맞게 3바이트 Row Address를 조합하여 전송합니다.
-        (수정된 물리 주소 계산 방식)
+        (물리 주소 계산 최종 수정)
         """
         # 1. 페이지 번호로부터 블록 내 페이지 오프셋과 블록 번호를 계산합니다.
-        page_in_block = page_no % self.PAGES_PER_BLOCK  # PA[5:0]
-        block_no = page_no // self.PAGES_PER_BLOCK      # BA[11:0]
+        page_in_block = page_no % self.PAGES_PER_BLOCK
+        block_no = page_no // self.PAGES_PER_BLOCK
 
         # 2. Cycle 3, 4, 5에 해당하는 Row Address를 계산합니다.
         row_addresses = [
-            # Cycle 3: {BA[7], BA[6], PA[5:0]}
-            page_in_block | ((block_no << 2) & 0xC0),
-            # Cycle 4: {BA[15:8]} -> 4Gb 칩에서는 BA[11:8]
-            (block_no >> 6) & 0xFF,
-            # Cycle 5: {BA[17:16]} -> 4Gb 칩에서는 사용 안함
-            (block_no >> 14) & 0x03
+            # Cycle 3: {BA[7], BA[6], PA[5:0]} [cite: 678]
+            (page_in_block & 0x3F) | (block_no & 0xC0),
+            # Cycle 4: {BA[15:8]} -> 4Gb 칩에서는 BA[11:8] [cite: 678]
+            (block_no >> 8) & 0x0F,
+            # Cycle 5: {BA[17:16]} -> 4Gb 칩에서는 사용 안함 [cite: 678]
+            0x00
         ]
 
         # 3. 생성된 주소를 전송합니다.
