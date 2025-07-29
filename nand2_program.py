@@ -157,8 +157,24 @@ def program_page_only(nand, page_no: int, write_data: bytes, max_retries: int = 
 
 def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict:
     """
-    배치로 페이지들을 검증합니다. (수정: 페이지 전체 비교로 복원)
+    배치로 페이지들을 검증합니다. (ECC 영역 제외)
+    ECC 영역: 808h-80Fh, 818h-81Fh, 828h-82Fh, 838h-83Fh
     """
+    # ECC 영역 정의 (16진수 주소를 10진수로 변환)
+    ECC_RANGES = [
+        (0x808, 0x80F),  # 808h-80Fh
+        (0x818, 0x81F),  # 818h-81Fh  
+        (0x828, 0x82F),  # 828h-82Fh
+        (0x838, 0x83F),  # 838h-83Fh
+    ]
+    
+    def is_ecc_offset(offset):
+        """주어진 오프셋이 ECC 영역인지 확인"""
+        for start, end in ECC_RANGES:
+            if start <= offset <= end:
+                return True
+        return False
+    
     results = {'success': [], 'failed': []}
     for page_info in page_data_list:
         page_no = page_info['page_no']
@@ -169,28 +185,37 @@ def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict
                 # 페이지 전체를 읽어옵니다.
                 read_data = nand.read_page(page_no, len(original_data))
                 
-                # ✨ 핵심 수정: 다시 페이지 전체를 비교합니다.
-                if read_data != original_data:
-                    mismatches = []
-                    compare_len = min(len(original_data), len(read_data))
-                    
-                    # ✨ 불일치 검사도 전체 길이에 대해 수행합니다.
-                    for i in range(compare_len):
-                        written_byte = original_data[i]
-                        read_byte = read_data[i]
-                        if written_byte != read_byte:
-                            mismatches.append(
-                                f"  - 오프셋 0x{i:04X}: 쓰기=0x{written_byte:02X}, 읽기=0x{read_byte:02X}"
-                            )
-                            if len(mismatches) >= 16:
-                                mismatches.append("  - ... (불일치 다수)")
-                                break
-                    
+                # ECC 영역을 제외한 데이터 비교
+                mismatches = []
+                compare_len = min(len(original_data), len(read_data))
+                ecc_skipped_count = 0
+                
+                for i in range(compare_len):
+                    # ECC 영역은 건너뛰기
+                    if is_ecc_offset(i):
+                        ecc_skipped_count += 1
+                        continue
+                        
+                    written_byte = original_data[i]
+                    read_byte = read_data[i]
+                    if written_byte != read_byte:
+                        mismatches.append(
+                            f"  - 오프셋 0x{i:04X}: 쓰기=0x{written_byte:02X}, 읽기=0x{read_byte:02X}"
+                        )
+                        if len(mismatches) >= 16:
+                            mismatches.append("  - ... (불일치 다수)")
+                            break
+                
+                # 불일치가 있으면 오류 발생
+                if mismatches:
                     error_details = "\n".join(mismatches)
                     len_info = f"데이터 길이: 쓰기={len(original_data)}, 읽기={len(read_data)}"
-                    raise ValueError(f"데이터 검증 실패:\n{len_info}\n불일치 내역:\n{error_details}")
+                    ecc_info = f"ECC 영역 제외됨: {ecc_skipped_count}바이트"
+                    raise ValueError(f"데이터 검증 실패:\n{len_info}\n{ecc_info}\n불일치 내역:\n{error_details}")
                 
                 results['success'].append(page_info)
+                if ecc_skipped_count > 0:
+                    print(f"    검증 완료 (ECC 영역 {ecc_skipped_count}바이트 제외): Page {page_no}")
                 break
                 
             except Exception as e:
