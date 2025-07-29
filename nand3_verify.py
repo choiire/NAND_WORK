@@ -81,7 +81,7 @@ def verify_nand_sequential(input_filepath: str):
                     read_success = False
                     for attempt in range(MAX_RETRIES):
                         try:
-                            page_data = nand.read_page(page_no)
+                            page_data = nand.read_page(page_no, nand.PAGE_SIZE + nand.SPARE_SIZE)
                             f_out.write(page_data)
                             read_success = True
                             break # 성공 시 재시도 루프 탈출
@@ -91,7 +91,7 @@ def verify_nand_sequential(input_filepath: str):
                     
                     if not read_success:
                         print(f"\n오류: 페이지 {page_no} 최종 읽기 실패. 0xFF로 채웁니다.")
-                        f_out.write(b'\xFF' * nand.PAGE_SIZE)
+                        f_out.write(b'\xFF' * (nand.PAGE_SIZE + nand.SPARE_SIZE))
 
 
         read_duration = datetime.now() - start_time
