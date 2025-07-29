@@ -1026,89 +1026,90 @@ class MT29F4G08ABADAWP:
         finally:
             self.reset_pins()
     
+    # nand_driver.py 파일에서 아래 두 함수를 교체하세요.
+
     def _write_full_address(self, page_no: int, col_addr: int = 0):
         """
         데이터시트(Table 2) 사양에 맞게 5바이트 전체 주소(컬럼+로우)를 조합하여 전송합니다.
-        개선된 타이밍 적용
+        (수정된 버전)
         """
-        # 주소 계산
+        # 1. 페이지 번호로부터 블록 내 페이지(PA)와 블록 번호(BA)를 분리합니다.
         page_in_block = page_no % self.PAGES_PER_BLOCK  # PA[5:0] (0-63)
-        block_no = page_no // self.PAGES_PER_BLOCK      # BA[11:0] (0-4095 for 4Gb)
+        block_no = page_no // self.PAGES_PER_BLOCK      # BA[11:0] (0-4095)
 
-        # 데이터시트의 5-Cycle Address 규격에 맞춰 5바이트 주소 생성
+        # 2. 데이터시트의 5-Cycle Address 규격에 맞춰 5바이트 주소를 정확히 생성합니다.
+        
         # Cycle 1: Column Address Lower Byte (CA[7:0])
         addr_byte1 = col_addr & 0xFF
         
         # Cycle 2: Column Address Upper Byte (CA[11:8])
-        # 페이지 크기가 2112(2048+64)이므로 컬럼 주소는 12비트(0-2111)가 필요합니다.
-        addr_byte2 = (col_addr >> 8) & 0x0F
+        addr_byte2 = (col_addr >> 8) & 0x0F # 12비트 컬럼 주소의 상위 4비트
         
-        # Cycle 3: {BA[7], BA[6], PA[5], PA[4], PA[3], PA[2], PA[1], PA[0]}
-        addr_byte3 = (block_no & 0xC0) | page_in_block
+        # Cycle 3: {BA7, BA6} 와 {PA5~PA0} 조합
+        # block_no에서 BA7, BA6 비트를 가져와 page_in_block과 합칩니다.
+        addr_byte3 = page_in_block | ((block_no << 2) & 0xC0) # BA7,BA6을 6,7번 비트로 이동
         
-        # Cycle 4: {BA[15], BA[14], BA[13], BA[12], BA[11], BA[10], BA[9], BA[8]}
-        addr_byte4 = (block_no >> 8) & 0xFF
+        # Cycle 4: {BA15~BA8} - 4Gb 모델에서는 BA11까지 유효
+        addr_byte4 = (block_no >> 6) & 0xFF
         
-        # Cycle 5: {LOW, ..., LOW, BA[17], BA[16]}
-        addr_byte5 = (block_no >> 16) & 0xFF
+        # Cycle 5: {BA17, BA16} - 4Gb 모델에서는 사용하지 않음
+        addr_byte5 = (block_no >> 14) & 0x0F
 
         addresses = [addr_byte1, addr_byte2, addr_byte3, addr_byte4, addr_byte5]
 
-        # 생성된 5바이트 주소 전송 (개선된 타이밍)
+        # 3. 생성된 5바이트 주소를 전송합니다.
         GPIO.output(self.CE, GPIO.LOW)
-        self._delay_ns(50)  # CE# setup time
+        self._delay_ns(50)
         GPIO.output(self.CLE, GPIO.LOW)
         GPIO.output(self.ALE, GPIO.HIGH)
-        self._delay_ns(self.tALS) # ALE setup time
+        self._delay_ns(self.tALS)
 
         for addr_byte in addresses:
             GPIO.output(self.WE, GPIO.LOW)
-            self._delay_ns(self.tWP) # WE# Pulse Width
+            self._delay_ns(self.tWP)
             self.write_data(addr_byte)
             GPIO.output(self.WE, GPIO.HIGH)
-            self._delay_ns(self.tWH) # WE# High Hold Time
+            self._delay_ns(self.tWH)
             
         GPIO.output(self.ALE, GPIO.LOW)
-        self._delay_ns(self.tALH) # ALE hold time
-        self._delay_ns(self.tADL) # ALE to Data Loading time
-    
+        self._delay_ns(self.tALH)
+
+
     def _write_row_address(self, page_no: int):
         """
-        데이터시트(Table 2) 사양에 맞게 3바이트 Row Address를 조합하여 전송합니다.
-        Erase 동작에서는 PA(페이지 주소) 비트들이 무시됩니다.
+        데이터시트 사양에 맞게 3바이트 Row Address를 조합하여 전송합니다.
+        (수정된 버전)
         """
-        # 페이지 번호로부터 페이지 주소(PA)와 블록 주소(BA) 계산
-        page_in_block = page_no % self.PAGES_PER_BLOCK  # PA[5:0] (0-63)
-        block_no = page_no // self.PAGES_PER_BLOCK      # BA[11:0] (0-4095)
+        # 1. 페이지 번호로부터 블록 내 페이지(PA)와 블록 번호(BA)를 분리합니다.
+        page_in_block = page_no % self.PAGES_PER_BLOCK
+        block_no = page_no // self.PAGES_PER_BLOCK
 
-        # 데이터시트의 Third, Fourth, Fifth address cycle에 맞춰 3바이트 주소 생성
-        # Cycle 3: {BA[7], BA[6], PA[5], PA[4], PA[3], PA[2], PA[1], PA[0]}
-        addr_byte3 = (block_no & 0xC0) | (page_in_block & 0x3F)
+        # 2. 데이터시트의 3, 4, 5번째 사이클에 맞춰 3바이트 주소를 정확히 생성합니다.
+        
+        # Cycle 3: {BA7, BA6} 와 {PA5~PA0} 조합
+        addr_byte3 = page_in_block | ((block_no << 2) & 0xC0)
 
-        # Cycle 4: {BA[15], BA[14], BA[13], BA[12], BA[11], BA[10], BA[9], BA[8]}
-        # 4Gb 칩은 BA[11:0]만 사용하므로 상위 비트는 0이 됩니다.
-        addr_byte4 = (block_no >> 8) & 0xFF
-
-        # Cycle 5: {LOW, LOW, LOW, LOW, LOW, LOW, BA[17], BA[16]}
-        # 4Gb 칩은 BA[17:16]을 사용하지 않으므로 이 바이트는 0입니다.
-        addr_byte5 = (block_no >> 16) & 0xFF
+        # Cycle 4: {BA15~BA8}
+        addr_byte4 = (block_no >> 6) & 0xFF
+        
+        # Cycle 5: {BA17, BA16}
+        addr_byte5 = (block_no >> 14) & 0x0F
 
         row_addresses = [addr_byte3, addr_byte4, addr_byte5]
 
-        # 생성된 주소 전송 (개선된 타이밍)
+        # 3. 생성된 주소를 전송합니다.
         GPIO.output(self.CE, GPIO.LOW)
-        self._delay_ns(50)  # CE# setup time
+        self._delay_ns(50)
         GPIO.output(self.CLE, GPIO.LOW)
         GPIO.output(self.ALE, GPIO.HIGH)
-        self._delay_ns(self.tALS) # ALE setup time
+        self._delay_ns(self.tALS)
 
         for addr_byte in row_addresses:
             GPIO.output(self.WE, GPIO.LOW)
-            self._delay_ns(self.tWP) # WE# pulse width
+            self._delay_ns(self.tWP)
             self.write_data(addr_byte)
             GPIO.output(self.WE, GPIO.HIGH)
-            self._delay_ns(self.tWH) # WE# high hold time
+            self._delay_ns(self.tWH)
             
         GPIO.output(self.ALE, GPIO.LOW)
-        self._delay_ns(self.tALH) # ALE hold time
-        self._delay_ns(self.tADL) # ALE to data loading time
+        self._delay_ns(self.tALH)
