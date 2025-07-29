@@ -1,3 +1,18 @@
+import os
+import sys
+import time
+import hashlib
+from datetime import datetime
+from nand_driver import MT29F8G08ADADA
+
+def calculate_file_hash(filepath: str) -> str:
+    """파일의 SHA256 해시를 계산합니다."""
+    sha256_hash = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(chunk)
+    return sha256_hash.hexdigest()
+
 def verify_nand_sequential(input_filepath: str):
     """
     NAND 데이터를 순차적으로 읽어 파일로 저장한 뒤, 원본과 비교 검증합니다.
@@ -54,11 +69,8 @@ def verify_nand_sequential(input_filepath: str):
                             time.sleep(RETRY_DELAY)
                     
                     if not read_success:
-                        print(f"\n오류: 페이지 {page_no} 최종 읽기 실패. 해당 블록을 0xFF로 채웁니다.")
-                        remaining_pages = nand.PAGES_PER_BLOCK - page_offset
-                        f_out.write(b'\xFF' * (remaining_pages * nand.PAGE_SIZE))
-                        nand.mark_bad_block(block)
-                        break # 다음 블록으로 넘어감
+                        print(f"\n오류: 페이지 {page_no} 최종 읽기 실패. 0xFF로 채웁니다.")
+                        f_out.write(b'\xFF' * nand.PAGE_SIZE)
 
 
         read_duration = datetime.now() - start_time
@@ -90,3 +102,11 @@ def verify_nand_sequential(input_filepath: str):
     except Exception as e:
         print(f"\n치명적 오류 발생: {e}")
         return False
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("사용법: python nand3_verify.py <입력_파일>")
+        sys.exit(1)
+    
+    input_file = sys.argv[1]
+    verify_nand_sequential(input_file)
