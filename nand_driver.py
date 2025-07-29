@@ -813,8 +813,6 @@ class MT29F4G08ABADAWP:
         finally:
             self.reset_pins()
             
-    
-    
     def erase_block(self, page_no: int):
         """
         한 개의 블록을 지웁니다. (수정된 버전)
@@ -1026,7 +1024,6 @@ class MT29F4G08ABADAWP:
         finally:
             self.reset_pins()
     
-
     def _write_full_address(self, page_no: int, col_addr: int = 0):
         """
         데이터시트 사양에 맞게 5바이트 전체 주소(컬럼+로우)를 조합하여 전송합니다.
