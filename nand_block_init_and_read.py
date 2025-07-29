@@ -205,22 +205,27 @@ def main():
         try:
             original_data = load_bin_file(bin_file_path)
             
-            # 데이터 크기 확인 및 조정
-            if len(original_data) > 2048:
-                print(f"⚠️  파일 크기가 2048바이트를 초과합니다. 처음 2048바이트만 사용합니다.")
-                write_data = original_data[:2048]
-            elif len(original_data) < 2048:
-                print(f"📝 파일 크기가 2048바이트보다 작습니다. 0xFF로 패딩합니다.")
-                write_data = original_data + b'\xFF' * (2048 - len(original_data))
+            # 데이터 크기 확인 및 조정 (전체 페이지 크기 2112바이트 기준)
+            if len(original_data) > 2112:
+                print(f"⚠️  파일 크기가 2112바이트를 초과합니다. 처음 2112바이트만 사용합니다.")
+                write_data = original_data[:2112]
+            elif len(original_data) < 2112:
+                print(f"📝 파일 크기가 2112바이트보다 작습니다. 0xFF로 패딩합니다.")
+                write_data = original_data + b'\xFF' * (2112 - len(original_data))
             else:
                 write_data = original_data
             
-            # NAND에 데이터 쓰기
-            print(f"\n✍️  블록 {block_no}의 첫 페이지에 데이터 쓰기 중...")
+            print(f"📊 쓰기 데이터 정보:")
+            print(f"   - 전체 크기: {len(write_data)} 바이트")
+            print(f"   - 메인 영역: {len(write_data[:2048])} 바이트")
+            print(f"   - 스페어 영역: {len(write_data[2048:])} 바이트")
+            
+            # NAND에 전체 페이지 데이터 쓰기 (메인 + 스페어)
+            print(f"\n✍️  블록 {block_no}의 첫 페이지에 전체 데이터 쓰기 중...")
             start_time = time.time()
-            nand.write_page(first_page, write_data)
+            nand.write_full_page(first_page, write_data)
             write_time = time.time() - start_time
-            print(f"✅ 데이터 쓰기 완료 (소요 시간: {write_time:.3f}초)")
+            print(f"✅ 전체 페이지 데이터 쓰기 완료 (소요 시간: {write_time:.3f}초)")
             
         except Exception as e:
             print(f"❌ 파일 로드 또는 쓰기 실패: {str(e)}")
@@ -239,22 +244,30 @@ def main():
         print(f"✅ 페이지 데이터 읽기 완료 (소요 시간: {read_time:.3f}초)")
         print(f"📊 읽은 데이터 크기: {len(page_data)} 바이트 (메인 영역: 2048, 스페어 영역: 64)")
         
-        # 데이터 검증 (원본 파일과 비교)
+        # 데이터 검증 (원본 파일과 비교) - 전체 페이지 비교
         if original_data is not None and write_data is not None:
-            print(f"\n🔍 데이터 검증 중...")
-            read_main_area = page_data[:2048]
-            comparison = compare_data(write_data, read_main_area)
+            print(f"\n🔍 전체 페이지 데이터 검증 중...")
+            comparison = compare_data(write_data, page_data)
             
             if comparison['identical']:
-                print("✅ 데이터 검증 성공: 쓴 데이터와 읽은 데이터가 일치합니다!")
+                print("✅ 데이터 검증 성공: 쓴 데이터와 읽은 데이터가 완전히 일치합니다!")
+                print("   - 메인 영역 (2048 바이트): 일치")
+                print("   - 스페어 영역 (64 바이트): 일치")
             else:
                 print(f"❌ 데이터 검증 실패: {comparison['total_differences']}개의 차이점 발견")
                 if comparison.get('size_mismatch'):
                     print(f"   크기 불일치: 원본 {comparison['original_size']}, 읽음 {comparison['read_size']}")
                 else:
-                    print("   첫 10개 차이점:")
-                    for diff in comparison['differences']:
-                        print(f"     오프셋 0x{diff['offset']:04X}: 원본=0x{diff['original']:02X}, 읽음=0x{diff['read_back']:02X}")
+                    # 메인 영역과 스페어 영역별로 차이점 분석
+                    main_diffs = [d for d in comparison['differences'] if d['offset'] < 2048]
+                    spare_diffs = [d for d in comparison['differences'] if d['offset'] >= 2048]
+                    
+                    print(f"   - 메인 영역 차이점: {len([d for d in comparison['differences'] if d['offset'] < 2048])}개")
+                    print(f"   - 스페어 영역 차이점: {len([d for d in comparison['differences'] if d['offset'] >= 2048])}개")
+                    print("\n   첫 10개 차이점:")
+                    for diff in comparison['differences'][:10]:
+                        area = "메인" if diff['offset'] < 2048 else "스페어"
+                        print(f"     오프셋 0x{diff['offset']:04X} ({area}): 원본=0x{diff['original']:02X}, 읽음=0x{diff['read_back']:02X}")
                     if comparison['total_differences'] > 10:
                         print(f"     ... 및 {comparison['total_differences'] - 10}개 더")
         
