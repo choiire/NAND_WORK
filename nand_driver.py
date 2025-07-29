@@ -1,14 +1,14 @@
 import RPi.GPIO as GPIO
 import time
 
-#1
+#2
 
 class MT29F4G08ABADAWP:
     # NAND 플래시 상수
     PAGE_SIZE = 2048
     SPARE_SIZE = 64
     PAGES_PER_BLOCK = 64
-    TOTAL_BLOCKS = 4096
+    TOTAL_BLOCKS = 8192
     
     # 타이밍 상수 (ns) - 데이터시트의 Max/Min 값과 충분한 여유를 고려하여 재조정
     # 라즈베리 파이 Python GPIO 제어의 비결정성(non-determinism)을 감안하여 더 큰 값으로 설정
@@ -1023,35 +1023,33 @@ class MT29F4G08ABADAWP:
             print(f"ECC 상태 확인 중 오류 발생: {e}")
         finally:
             self.reset_pins()
-    
+
     def _write_full_address(self, page_no: int, col_addr: int = 0):
         """
-        데이터시트(Table 2) 사양에 맞게 5바이트 전체 주소(컬럼+로우)를 조합하여 전송합니다.
-        (물리 주소 계산 최종 수정)
+        8Gb 모델(MT29F8G)의 데이터시트(Table 4) 사양에 맞게 
+        5바이트 전체 주소(컬럼+로우)를 조합하여 전송합니다.
         """
-        # 1. 페이지 번호로부터 블록 내 페이지 오프셋과 블록 번호를 계산합니다.
-        page_in_block = page_no % self.PAGES_PER_BLOCK      # PA[5:0] (0-63)
-        block_no = page_no // self.PAGES_PER_BLOCK          # BA[11:0] (0-4095)
+        page_in_block = page_no % self.PAGES_PER_BLOCK
+        block_no = page_no // self.PAGES_PER_BLOCK
 
-        # 2. 데이터시트의 5-Cycle Address 규격에 맞춰 5바이트 주소를 생성합니다.
         addresses = [0] * 5
 
-        # Cycle 1 & 2: Column Address (12비트) [cite: 678]
+        # Cycle 1 & 2: Column Address
         addresses[0] = col_addr & 0xFF
         addresses[1] = (col_addr >> 8) & 0x0F
 
-        # Cycle 3: {BA[7], BA[6], PA[5:0]} [cite: 678]
-        # 데이터시트상 BA[5:0]은 명시되어 있지 않지만, 다른 BA비트와 함께 PA가 조합됩니다.
-        # Erase에서는 PA[5:0]이 무시됩니다.
+        # Cycle 3: {BA[7], BA[6], PA[5:0]}
         addresses[2] = (page_in_block & 0x3F) | (block_no & 0xC0)
+        
+        # Cycle 4: {BA[15:8]} -> 8Gb 모델은 BA[12:8]
+        addresses[3] = (block_no >> 8) & 0xFF
+        
+        # Cycle 5: {BA18, BA17, BA16} -> 8Gb 모델은 BA18 사용
+        # BA18은 블록 4096 이상일 때 1이 됩니다. (block_no의 12번째 비트)
+        # 이 비트를 I/O[2] 위치로 시프트합니다.
+        addresses[4] = ((block_no >> 12) & 1) << 2
 
-        # Cycle 4: {BA[15:8]} -> 4Gb 칩에서는 BA[11:8] [cite: 678]
-        addresses[3] = (block_no >> 8) & 0x0F
-
-        # Cycle 5: {BA[17:16]} -> 4Gb 칩에서는 사용 안함 [cite: 678]
-        addresses[4] = 0x00
-
-        # 3. 생성된 5바이트 주소를 전송합니다.
+        # 생성된 5바이트 주소를 전송
         GPIO.output(self.CE, GPIO.LOW)
         self._delay_ns(50)
         GPIO.output(self.CLE, GPIO.LOW)
@@ -1068,27 +1066,24 @@ class MT29F4G08ABADAWP:
         GPIO.output(self.ALE, GPIO.LOW)
         self._delay_ns(self.tALH)
 
-
     def _write_row_address(self, page_no: int):
         """
-        데이터시트(Table 2) 사양에 맞게 3바이트 Row Address를 조합하여 전송합니다.
-        (물리 주소 계산 최종 수정)
+        8Gb 모델(MT29F8G)의 데이터시트(Table 4) 사양에 맞게 
+        3바이트 Row Address를 조합하여 전송합니다.
         """
-        # 1. 페이지 번호로부터 블록 내 페이지 오프셋과 블록 번호를 계산합니다.
         page_in_block = page_no % self.PAGES_PER_BLOCK
         block_no = page_no // self.PAGES_PER_BLOCK
 
-        # 2. Cycle 3, 4, 5에 해당하는 Row Address를 계산합니다.
         row_addresses = [
-            # Cycle 3: {BA[7], BA[6], PA[5:0]} [cite: 678]
+            # Cycle 3: {BA[7], BA[6], PA[5:0]}
             (page_in_block & 0x3F) | (block_no & 0xC0),
-            # Cycle 4: {BA[15:8]} -> 4Gb 칩에서는 BA[11:8] [cite: 678]
-            (block_no >> 8) & 0x0F,
-            # Cycle 5: {BA[17:16]} -> 4Gb 칩에서는 사용 안함 [cite: 678]
-            0x00
+            # Cycle 4: {BA[15:8]} -> 8Gb 모델은 BA[12:8]
+            (block_no >> 8) & 0xFF,
+            # Cycle 5: {BA18, BA17, BA16} -> 8Gb 모델은 BA18 사용
+            ((block_no >> 12) & 1) << 2
         ]
 
-        # 3. 생성된 주소를 전송합니다.
+        # 생성된 주소를 전송
         GPIO.output(self.CE, GPIO.LOW)
         self._delay_ns(50)
         GPIO.output(self.CLE, GPIO.LOW)
