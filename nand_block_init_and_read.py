@@ -100,6 +100,11 @@ def verify_block_erased(nand: MT29F4G08ABADAWP, block_no: int) -> bool:
         print(f"❌ 블록 {block_no} 검증 중 오류: {str(e)}")
         return False
 
+def check_ecc_status_with_message(nand: MT29F4G08ABADAWP, step_name: str):
+    """ECC 상태를 확인하고 단계별 메시지와 함께 출력합니다."""
+    print(f"\n🔍 {step_name} - ECC 상태 확인:")
+    nand.check_ecc_status()
+
 def load_bin_file(file_path: str) -> bytes:
     """bin 파일을 읽어서 바이트 데이터로 반환합니다."""
     try:
@@ -198,6 +203,9 @@ def main():
         if not verify_block_erased(nand, block_no):
             print("⚠️  블록 삭제 검증에 실패했지만 계속 진행합니다...")
         
+        # 블록 삭제 후 ECC 상태 확인
+        check_ecc_status_with_message(nand, "블록 삭제 후")
+        
         # 00000000.bin 파일 로드 및 쓰기
         bin_file_path = os.path.join("output_splits", "00000000.bin")
         print(f"\n📂 파일 로드 중: {bin_file_path}")
@@ -227,6 +235,9 @@ def main():
             write_time = time.time() - start_time
             print(f"✅ 전체 페이지 데이터 쓰기 완료 (소요 시간: {write_time:.3f}초)")
             
+            # 데이터 쓰기 후 ECC 상태 확인
+            check_ecc_status_with_message(nand, "데이터 쓰기 후")
+            
         except Exception as e:
             print(f"❌ 파일 로드 또는 쓰기 실패: {str(e)}")
             print("📖 삭제된 상태의 페이지를 읽어서 표시합니다...")
@@ -243,6 +254,9 @@ def main():
         
         print(f"✅ 페이지 데이터 읽기 완료 (소요 시간: {read_time:.3f}초)")
         print(f"📊 읽은 데이터 크기: {len(page_data)} 바이트 (메인 영역: 2048, 스페어 영역: 64)")
+        
+        # 데이터 읽기 후 ECC 상태 확인
+        check_ecc_status_with_message(nand, "데이터 읽기 후")
         
         # 데이터 검증 (원본 파일과 비교) - 전체 페이지 비교
         if original_data is not None and write_data is not None:
@@ -321,10 +335,18 @@ def main():
                 if len(sorted_counts) > 10:
                     print(f"  ... 및 {len(sorted_counts) - 10}개 더")
         
+        # 프로그램 종료 전 최종 ECC 상태 확인
+        check_ecc_status_with_message(nand, "프로그램 종료 전 최종")
+        
         print("\n✅ 프로그램 실행 완료!")
         
     except Exception as e:
         print(f"\n❌ 오류 발생: {str(e)}")
+        # 오류 발생 시에도 ECC 상태 확인
+        try:
+            check_ecc_status_with_message(nand, "오류 발생 시")
+        except:
+            pass
         sys.exit(1)
     
     finally:
