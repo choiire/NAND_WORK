@@ -282,8 +282,17 @@ def program_nand(initialize_blocks: bool = False):
             sys.stdout.write(f"\r파일 {file_index + 1}/{total_files}: {filename} 처리 중...")
             sys.stdout.flush()
             
+            # 디버그: 실제 처리 중인 파일 정보 출력
+            print(f"\n[DEBUG] 실제 처리 파일: {filename}")
+            
             try:
                 filepath = os.path.join(splits_dir, filename)
+                
+                # 파일 존재 여부 확인
+                if not os.path.exists(filepath):
+                    print(f"\n오류: 파일이 존재하지 않습니다: {filename}")
+                    continue
+                    
                 if os.path.getsize(filepath) == 0:
                     print(f"\n경고: 파일이 비어있어 건너뜁니다: {filename}")
                     continue
@@ -297,6 +306,8 @@ def program_nand(initialize_blocks: bool = False):
 
                 start_address = hex_to_int(filename.split('.')[0])
                 page_no = start_address // FULL_PAGE_SIZE
+                
+                print(f"[DEBUG] 파일명: {filename}, 주소: 0x{start_address:08X}, 페이지: {page_no}")
 
                 total_pages_to_process += 1
                 
