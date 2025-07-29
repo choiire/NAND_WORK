@@ -278,12 +278,14 @@ def program_nand(initialize_blocks: bool = False):
 
         # 파일을 하나씩 처리
         for file_index, filename in enumerate(files):
-            print(f"\n.--- 파일 {file_index + 1}/{total_files}: {filename} 처리 중 ---")
+            # 진행률을 같은 줄에 출력 (줄바꿈 없이)
+            sys.stdout.write(f"\r파일 {file_index + 1}/{total_files}: {filename} 처리 중...")
+            sys.stdout.flush()
             
             try:
                 filepath = os.path.join(splits_dir, filename)
                 if os.path.getsize(filepath) == 0:
-                    print(f"경고: 파일이 비어있어 건너뜁니다: {filename}")
+                    print(f"\n경고: 파일이 비어있어 건너뜁니다: {filename}")
                     continue
 
                 with open(filepath, 'rb') as f:
@@ -291,14 +293,12 @@ def program_nand(initialize_blocks: bool = False):
 
                 # 파일 크기 검증 (2112바이트 고정)
                 if len(file_data) != FULL_PAGE_SIZE:
-                    print(f"경고: 파일 크기가 예상과 다릅니다 ({len(file_data)}바이트, 예상: {FULL_PAGE_SIZE}바이트): {filename}")
+                    print(f"\n경고: 파일 크기가 예상과 다릅니다 ({len(file_data)}바이트, 예상: {FULL_PAGE_SIZE}바이트): {filename}")
 
                 start_address = hex_to_int(filename.split('.')[0])
                 page_no = start_address // FULL_PAGE_SIZE
 
                 total_pages_to_process += 1
-                
-                print(f"  [1단계] 쓰기 작업 진행... (페이지 {page_no})")
                 
                 # 페이지 쓰기
                 write_success = False
@@ -307,11 +307,10 @@ def program_nand(initialize_blocks: bool = False):
                         write_success = True
                 except Exception as e:
                     failed_files_info.append({'file': filename, 'reason': str(e)})
-                    print(f"    쓰기 실패: Page {page_no} - {e}")
+                    print(f"\n    쓰기 실패: Page {page_no} - {e}")
 
                 # 검증 단계
                 if write_success:
-                    print(f"  [2단계] 검증 작업 진행... (페이지 {page_no})")
                     page_info = {
                         'filename': filename,
                         'page_no': page_no,
@@ -321,18 +320,18 @@ def program_nand(initialize_blocks: bool = False):
                     
                     if verification_results['success']:
                         successful_pages_count += 1
-                        print(f"  파일 완료: 성공")
+                        # 성공 시에는 진행률만 업데이트 (줄바꿈 없음)
                     else:
                         failed_info = verification_results['failed'][0]
                         failed_files_info.append({'file': filename, 'reason': failed_info['error']})
-                        print(f"    검증 실패: Page {page_no} - {failed_info['error']}")
-                        print(f"  파일 완료: 실패")
-                else:
-                    print(f"  파일 완료: 쓰기 실패")
+                        print(f"\n    검증 실패: Page {page_no} - {failed_info['error']}")
                         
             except Exception as e:
                 failed_files_info.append({'file': filename, 'reason': f"파일 처리 중 오류: {e}"})
-                print(f"  파일 처리 실패: {filename} - {e}")
+                print(f"\n  파일 처리 실패: {filename} - {e}")
+        
+        # 모든 파일 처리 완료 후 줄바꿈
+        print("\n")
         
         end_datetime = datetime.now()
         duration = end_datetime - start_datetime
