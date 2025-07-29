@@ -104,9 +104,5 @@ def verify_nand_sequential(input_filepath: str):
         return False
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("사용법: python nand3_verify.py <입력_파일>")
-        sys.exit(1)
-    
-    input_file = sys.argv[1]
+    input_file = "input.bin"
     verify_nand_sequential(input_file)
