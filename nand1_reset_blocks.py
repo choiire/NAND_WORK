@@ -1,7 +1,7 @@
 import sys
 import time
 from datetime import datetime
-from nand_driver import MT29F4G08ABADAWP
+from nand_driver import MT29F8G08ADADA
 
 def verify_block(nand, block_no: int, pages_to_check: list = None) -> dict:
     """단일 블록 검증
@@ -279,7 +279,7 @@ def get_two_plane_pairs_from_list(block_list: list) -> (list, list):
     
     return pairs, remaining_blocks
 
-def scan_bad_blocks_after_erase(nand: MT29F4G08ABADAWP):
+def scan_bad_blocks_after_erase(nand: MT29F8G08ADADA):
     """삭제 후 Bad Block 스캔"""
     TOTAL_BLOCKS = 4096
     PAGES_PER_BLOCK = 64
@@ -347,7 +347,7 @@ def scan_bad_blocks_after_erase(nand: MT29F4G08ABADAWP):
     
     return new_bad_blocks
 
-def erase_and_verify_blocks_two_plane(nand: MT29F4G08ABADAWP, verification_level: str = "quick"):
+def erase_and_verify_blocks_two_plane(nand: MT29F8G08ADADA, verification_level: str = "quick"):
     """Two-plane 기능을 사용한 모든 블록 강제 삭제 및 검증 (최종 수정본)"""
     TOTAL_BLOCKS = 4096
     PAGES_PER_BLOCK = 64
@@ -505,7 +505,7 @@ if __name__ == "__main__":
     try:
         print("NAND 드라이버 초기화 중 (공장 Bad Block 스캔)...")
         # 시작할 때 공장 Bad Block을 스캔하는 것이 안전합니다.
-        nand_chip = MT29F4G08ABADAWP(skip_bad_block_scan=False) 
+        nand_chip = MT29F8G08ADADA(skip_bad_block_scan=False) 
     except Exception as e:
         print(f"드라이버 초기화 실패: {e}")
         sys.exit(1)

@@ -9,7 +9,7 @@ def verify_nand_sequential(input_filepath: str):
     
     try:
         print("NAND 드라이버 초기화 중 (공장 Bad Block 스캔)...")
-        nand = MT29F4G08ABADAWP()
+        nand = MT29F8G08ADADA()
         
         # 1. 입력 파일 유효성 검사
         if not os.path.exists(input_filepath):

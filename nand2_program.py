@@ -1,12 +1,12 @@
 import os
 import sys
 from datetime import datetime
-from nand_driver import MT29F4G08ABADAWP
+from nand_driver import MT29F8G08ADADA
 import time
 
 # --- 새로운 상수 정의 ---
-FULL_PAGE_SIZE = MT29F4G08ABADAWP.PAGE_SIZE + MT29F4G08ABADAWP.SPARE_SIZE # 2112 바이트
-#PAGE_SIZE = MT29F4G08ABADAWP.PAGE_SIZE
+FULL_PAGE_SIZE = MT29F8G08ADADA.PAGE_SIZE + MT29F8G08ADADA.SPARE_SIZE # 2112 바이트
+#PAGE_SIZE = MT29F8G08ADADA.PAGE_SIZE
 
 def hex_to_int(hex_str: str) -> int:
     """16진수 문자열을 정수로 변환"""
@@ -18,7 +18,7 @@ def hex_to_int(hex_str: str) -> int:
 def calculate_page_number(address: int) -> int:
     """주소를 페이지 번호로 변환"""
     page_no = address // FULL_PAGE_SIZE # 주소 계산의 기준을 전체 페이지 크기로 변경
-    if page_no >= 256 * 1024:
+    if page_no >= 8192 * 64:
         raise ValueError(f"유효하지 않은 페이지 번호: {page_no}")
     return page_no
 
@@ -58,7 +58,7 @@ def get_two_plane_pairs(total_blocks: int) -> tuple:
 
 def erase_all_blocks_fast(nand):
     """검증 없이 모든 블록을 빠르게 초기화합니다 (Two-plane 기능 사용)"""
-    TOTAL_BLOCKS = 4096
+    TOTAL_BLOCKS = 8192
     PAGES_PER_BLOCK = 64
     
     try:
@@ -231,7 +231,7 @@ def program_nand(initialize_blocks: bool = False):
     """NAND 플래시 프로그래밍 (메모리 최적화 및 최종 수정)"""
     try:
         print("NAND 플래시 드라이버 초기화 중...")
-        nand = MT29F4G08ABADAWP()
+        nand = MT29F8G08ADADA()
         # ECC 비활성화 및 상태 검증
         print("\n내부 ECC 엔진 설정을 확인합니다...")
         ecc_disabled = nand.disable_internal_ecc()

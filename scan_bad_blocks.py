@@ -6,8 +6,8 @@ import time
 import RPi.GPIO as GPIO 
 from datetime import datetime
 
-# MT29F4G08ABADAWP 클래스 (nand_driver.py에서 가져옴)
-class MT29F4G08ABADAWP:
+# MT29F8G08ADADA 클래스 (nand_driver.py에서 가져옴)
+class MT29F8G08ADADA:
     # NAND 플래시 상수
     PAGE_SIZE = 2048
     SPARE_SIZE = 64
@@ -412,7 +412,7 @@ class MT29F4G08ABADAWP:
         데이터시트(Table 2) 사양에 맞게 5바이트 전체 주소(컬럼+로우)를 조합하여 전송합니다.
         개선된 타이밍 적용.
         """
-        # 주소 계산 (MT29F4G08ABADAWP 기준)
+        # 주소 계산 (MT29F8G08ADADA 기준)
         page_in_block = page_no % self.PAGES_PER_BLOCK  # PA[5:0] (0-63) [cite: 678]
         block_no = page_no // self.PAGES_PER_BLOCK      # BA[11:0] (0-4095 for 4Gb) [cite: 678]
 
@@ -747,7 +747,7 @@ def main():
     nand = None
     try:
         print("NAND 플래시 드라이버 초기화 중...")
-        nand = MT29F4G08ABADAWP()
+        nand = MT29F8G08ADADA()
         
         print("\n내부 ECC 엔진 설정을 확인합니다...")
         ecc_disabled = nand.disable_internal_ecc()

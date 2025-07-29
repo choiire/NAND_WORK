@@ -13,7 +13,7 @@ import sys
 import time
 import os
 from datetime import datetime
-from nand_driver import MT29F4G08ABADAWP
+from nand_driver import MT29F8G08ADADA
 
 def format_hex_output(data: bytes, bytes_per_line: int = 16) -> str:
     """바이트 데이터를 보기 좋은 16진수 형태로 포맷팅합니다."""
@@ -69,7 +69,7 @@ def format_hex_output_with_offset(data: bytes, offset: int = 0, bytes_per_line: 
     
     return "\n".join(lines)
 
-def verify_block_erased(nand: MT29F4G08ABADAWP, block_no: int) -> bool:
+def verify_block_erased(nand: MT29F8G08ADADA, block_no: int) -> bool:
     """블록이 제대로 삭제되었는지 확인합니다 (모든 바이트가 0xFF인지 확인)."""
     PAGES_PER_BLOCK = 64
     FULL_PAGE_SIZE = 2112  # 메인 영역 2048 + 스페어 영역 64
@@ -100,7 +100,7 @@ def verify_block_erased(nand: MT29F4G08ABADAWP, block_no: int) -> bool:
         print(f"❌ 블록 {block_no} 검증 중 오류: {str(e)}")
         return False
 
-def check_ecc_status_with_message(nand: MT29F4G08ABADAWP, step_name: str):
+def check_ecc_status_with_message(nand: MT29F8G08ADADA, step_name: str):
     """ECC 상태를 확인하고 단계별 메시지와 함께 출력합니다."""
     print(f"\n🔍 {step_name} - ECC 상태 확인:")
     nand.check_ecc_status()
@@ -157,7 +157,7 @@ def main():
     print("\n🔧 NAND 드라이버 초기화 중...")
     try:
         # Bad Block 스캔을 건너뛰고 빠르게 초기화
-        nand = MT29F4G08ABADAWP(skip_bad_block_scan=True)
+        nand = MT29F8G08ADADA(skip_bad_block_scan=True)
         print("✅ NAND 드라이버 기본 초기화 완료")
         
         # 파워온 시퀀스 재실행 (안정성 확보)

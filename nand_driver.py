@@ -3,7 +3,7 @@ import time
 
 #2
 
-class MT29F4G08ABADAWP:
+class MT29F8G08ADADA:
     # NAND 플래시 상수
     PAGE_SIZE = 2048
     SPARE_SIZE = 64
@@ -1032,22 +1032,27 @@ class MT29F4G08ABADAWP:
         page_in_block = page_no % self.PAGES_PER_BLOCK
         block_no = page_no // self.PAGES_PER_BLOCK
 
+        # 8192개 블록은 13비트(0~12)로 표현됩니다. (2^13 = 8192)
+        # 데이터시트는 이 13개 비트를 BA6 ~ BA18로 매핑합니다.
+        # block_no의 0번째 비트 -> BA6, 12번째 비트 -> BA18
+
         addresses = [0] * 5
 
-        # Cycle 1 & 2: Column Address
+        # Cycle 1 & 2: Column Address (2바이트)
         addresses[0] = col_addr & 0xFF
-        addresses[1] = (col_addr >> 8) & 0x0F
+        addresses[1] = (col_addr >> 8) & 0x0F # 12비트 컬럼 주소
 
-        # Cycle 3: {BA[7], BA[6], PA[5:0]}
-        addresses[2] = (page_in_block & 0x3F) | (block_no & 0xC0)
+        # Cycle 3: {BA7, BA6, PA5, PA4, PA3, PA2, PA1, PA0}
+        # block_no의 하위 2비트(BA7, BA6)와 페이지 주소를 조합합니다.
+        addresses[2] = (page_in_block & 0x3F) | ((block_no & 0x03) << 6)
         
-        # Cycle 4: {BA[15:8]} -> 8Gb 모델은 BA[12:8]
-        addresses[3] = (block_no >> 8) & 0xFF
+        # Cycle 4: {BA15, BA14, BA13, BA12, BA11, BA10, BA9, BA8}
+        # block_no의 중간 8비트를 전송합니다.
+        addresses[3] = (block_no >> 2) & 0xFF
         
-        # Cycle 5: {BA18, BA17, BA16} -> 8Gb 모델은 BA18 사용
-        # BA18은 블록 4096 이상일 때 1이 됩니다. (block_no의 12번째 비트)
-        # 이 비트를 I/O[2] 위치로 시프트합니다.
-        addresses[4] = ((block_no >> 12) & 1) << 2
+        # Cycle 5: {LOW, LOW, LOW, LOW, LOW, BA18, BA17, BA16}
+        # block_no의 상위 3비트(BA18, BA17, BA16)를 전송합니다.
+        addresses[4] = (block_no >> 10) & 0x07
 
         # 생성된 5바이트 주소를 전송
         GPIO.output(self.CE, GPIO.LOW)
@@ -1069,18 +1074,18 @@ class MT29F4G08ABADAWP:
     def _write_row_address(self, page_no: int):
         """
         8Gb 모델(MT29F8G)의 데이터시트(Table 4) 사양에 맞게 
-        3바이트 Row Address를 조합하여 전송합니다.
+        3바이트 Row Address(블록+페이지)를 조합하여 전송합니다.
         """
         page_in_block = page_no % self.PAGES_PER_BLOCK
         block_no = page_no // self.PAGES_PER_BLOCK
 
         row_addresses = [
-            # Cycle 3: {BA[7], BA[6], PA[5:0]}
-            (page_in_block & 0x3F) | (block_no & 0xC0),
-            # Cycle 4: {BA[15:8]} -> 8Gb 모델은 BA[12:8]
-            (block_no >> 8) & 0xFF,
-            # Cycle 5: {BA18, BA17, BA16} -> 8Gb 모델은 BA18 사용
-            ((block_no >> 12) & 1) << 2
+            # Cycle 3: {BA7, BA6, PA5:PA0}
+            (page_in_block & 0x3F) | ((block_no & 0x03) << 6),
+            # Cycle 4: {BA15:BA8}
+            (block_no >> 2) & 0xFF,
+            # Cycle 5: {BA18, BA17, BA16}
+            (block_no >> 10) & 0x07
         ]
 
         # 생성된 주소를 전송
