@@ -228,26 +228,20 @@ def verify_pages_batch(nand, page_data_list: list, max_retries: int = 5) -> dict
     return results
 
 def program_nand(initialize_blocks: bool = False):
-    """NAND 플래시 프로그래밍 (Block 0는 ECC 활성화, 나머지는 비활성화)"""
+    """NAND 플래시 프로그래밍 (메모리 최적화 및 최종 수정)"""
     try:
         print("NAND 플래시 드라이버 초기화 중...")
         nand = MT29F8G08ADADA()
-        
-        # --- 👇 여기부터 수정 ---
-
-        # 1. 프로그램 시작 시 기본 상태를 ECC 비활성화로 설정
-        print("\n초기 상태 설정을 위해 내부 ECC 엔진을 비활성화합니다...")
-        if not nand.disable_internal_ecc():
-            print("경고: 초기 ECC 비활성화에 실패했습니다. 계속 진행하지만 문제가 발생할 수 있습니다.")
-            ecc_state_enabled = True # 실패 시 현재 상태를 알 수 없으므로 보수적으로 설정
-        else:
-            ecc_state_enabled = False # 현재 ECC 상태를 추적하는 변수
-
+        # ECC 비활성화 및 상태 검증
+        print("\n내부 ECC 엔진 설정을 확인합니다...")
+        ecc_disabled = nand.disable_internal_ecc()
+        if not ecc_disabled:
+            print("경고: ECC 비활성화에 실패했습니다. 프로그래밍을 계속하지만 예상치 못한 동작이 발생할 수 있습니다.")
         nand.check_ecc_status()
 
-        # 2. 전체 블록 초기화 (ECC 비활성화 상태에서 진행)
+        # 전체 블록 초기화 옵션
         if initialize_blocks:
-            print("\n전체 블록 초기화를 시작합니다 (ECC 비활성화 상태)...")
+            print("\n전체 블록 초기화를 시작합니다...")
             init_success = erase_all_blocks_fast(nand)
             if not init_success:
                 print("경고: 일부 블록 초기화에 실패했지만 프로그래밍을 계속합니다.")
@@ -265,13 +259,14 @@ def program_nand(initialize_blocks: bool = False):
         total_files = len(files)
         failed_files_info = []
         
-        MAX_RETRIES = 5
+        # BATCH_SIZE 제거 - 이제 파일을 하나씩 처리
+        MAX_RETRIES = 5 # 쓰기와 검증 모두에 사용할 재시도 횟수
         
         start_datetime = datetime.now()
         error_log_filename = f"program_errors_{start_datetime.strftime('%Y%m%d_%H%M%S')}.txt"
         
         print(f"\n{'.='*60}")
-        print(f" NAND 플래시 프로그래밍 시작 (Block 0 ECC 처리 포함)")
+        print(f" NAND 플래시 프로그래밍 시작 (Bad Block 없음 가정)")
         print(f"{'.='*60}")
         print(f"시작 시간: {start_datetime.strftime('%Y-%m-%d %H%M:%S')}")
         print(f"총 파일 수: {total_files}개")
@@ -283,53 +278,53 @@ def program_nand(initialize_blocks: bool = False):
 
         # 파일을 하나씩 처리
         for file_index, filename in enumerate(files):
+            # 진행률을 같은 줄에 출력 (줄바꿈 없이)
             sys.stdout.write(f"\r파일 {file_index + 1}/{total_files}: {filename} 처리 중...")
             sys.stdout.flush()
             
             try:
                 filepath = os.path.join(splits_dir, filename)
                 
-                if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
-                    print(f"\n경고: 파일이 없거나 비어있어 건너뜁니다: {filename}")
+                # 파일 존재 여부 확인
+                if not os.path.exists(filepath):
+                    print(f"\n오류: 파일이 존재하지 않습니다: {filename}")
+                    continue
+                    
+                if os.path.getsize(filepath) == 0:
+                    print(f"\n경고: 파일이 비어있어 건너뜁니다: {filename}")
                     continue
 
                 with open(filepath, 'rb') as f:
                     file_data = f.read()
 
+                # 파일 크기 검증 (2112바이트 고정)
+                if len(file_data) != FULL_PAGE_SIZE:
+                    print(f"\n경고: 파일 크기가 예상과 다릅니다 ({len(file_data)}바이트, 예상: {FULL_PAGE_SIZE}바이트): {filename}")
+
                 start_address = hex_to_int(filename.split('.')[0])
                 page_no = start_address // FULL_PAGE_SIZE
 
                 total_pages_to_process += 1
-
-                # 3. 페이지 번호에 따라 ECC 상태를 동적으로 변경
-                is_block_0 = (page_no < nand.PAGES_PER_BLOCK)
-
-                # Block 0을 써야 하는데 ECC가 꺼져있다면 활성화
-                if is_block_0 and not ecc_state_enabled:
-                    print(f"\n  [INFO] Block 0 작업을 위해 ECC 활성화 중 (페이지: {page_no})")
-                    if nand.enable_internal_ecc():
-                        ecc_state_enabled = True
-                    else:
-                        raise RuntimeError("ECC 활성화 실패")
-
-                # Block 1 이상을 써야 하는데 ECC가 켜져있다면 비활성화
-                elif not is_block_0 and ecc_state_enabled:
-                    print(f"\n  [INFO] Block 1 이상 작업을 위해 ECC 비활성화 중 (페이지: {page_no})")
-                    if nand.disable_internal_ecc():
-                        ecc_state_enabled = False
-                    else:
-                        raise RuntimeError("ECC 비활성화 실패")
                 
-                # --- 👆 여기까지 수정 ---
-
-                # 페이지 쓰기
+                # --- [핵심 수정] 페이지 쓰기 부분을 조건문으로 분기 ---
                 write_success = False
                 try:
-                    if program_page_only(nand, page_no, file_data, MAX_RETRIES):
-                        write_success = True
+                    if 0 <= page_no <= 3:
+                        # 페이지 0~3은 특수 쓰기 메소드 호출
+                        print(f"\n페이지 {page_no}: 특수 프로그래밍 모드로 전환합니다. (대상: {filename})")
+                        if page_no >= 2:
+                            print("  (경고: OTP 영역에 쓰기를 시도합니다. 실패할 수 있습니다.)")
+                        nand.write_full_page_for_block0(page_no, file_data)
+                        print(f"페이지 {page_no}: 특수 프로그래밍 완료.")
+                    else:
+                        # 나머지 페이지는 일반 쓰기 메소드 호출
+                        nand.write_full_page(page_no, file_data)
+                    
+                    write_success = True
                 except Exception as e:
                     failed_files_info.append({'file': filename, 'reason': str(e)})
                     print(f"\n    쓰기 실패: Page {page_no} - {e}")
+                # --- [수정] 끝 ---
 
                 # 검증 단계
                 if write_success:
@@ -342,6 +337,7 @@ def program_nand(initialize_blocks: bool = False):
                     
                     if verification_results['success']:
                         successful_pages_count += 1
+                        # 성공 시에는 진행률만 업데이트 (줄바꿈 없음)
                     else:
                         failed_info = verification_results['failed'][0]
                         failed_files_info.append({'file': filename, 'reason': failed_info['error']})
@@ -351,6 +347,7 @@ def program_nand(initialize_blocks: bool = False):
                 failed_files_info.append({'file': filename, 'reason': f"파일 처리 중 오류: {e}"})
                 print(f"\n  파일 처리 실패: {filename} - {e}")
         
+        # 모든 파일 처리 완료 후 줄바꿈
         print("\n")
         
         end_datetime = datetime.now()
@@ -359,7 +356,7 @@ def program_nand(initialize_blocks: bool = False):
         failed_pages_count = len(failed_files_info)
 
         print(f".=== NAND 플래시 프로그래밍 완료 ===")
-        print(f"완료 시간: {end_datetime.strftime('%Y-%m-%d %H%M:%S')}")
+        print(f"완료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"소요 시간: {duration}")
         print(f"\n총 처리 시도 페이지 수: {total_pages_to_process}")
         print(f"성공: {successful_pages_count}")

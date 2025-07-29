@@ -1,12 +1,14 @@
 import RPi.GPIO as GPIO
 import time
 
+#2
+
 class MT29F8G08ADADA:
     # NAND 플래시 상수
     PAGE_SIZE = 2048
     SPARE_SIZE = 64
     PAGES_PER_BLOCK = 64
-    TOTAL_BLOCKS = 4096
+    TOTAL_BLOCKS = 8192
     
     # 타이밍 상수 (ns) - 데이터시트의 Max/Min 값과 충분한 여유를 고려하여 재조정
     # 라즈베리 파이 Python GPIO 제어의 비결정성(non-determinism)을 감안하여 더 큰 값으로 설정
@@ -626,8 +628,6 @@ class MT29F8G08ADADA:
         finally:
             self.reset_pins()
 
-    
-
     def read_page(self, page_no: int, length: int = 2048):
         """한 페이지 읽기 (내장 하드웨어 ECC 사용) - 개선된 버전"""
         try:
@@ -812,7 +812,7 @@ class MT29F8G08ADADA:
             raise RuntimeError(f"Two-plane 페이지 읽기 실패 ({page_no1}, {page_no2}): {str(e)}")
         finally:
             self.reset_pins()
-            
+    
     def erase_block(self, page_no: int):
         """
         한 개의 블록을 지웁니다. (수정된 버전)
@@ -1023,26 +1023,38 @@ class MT29F8G08ADADA:
             print(f"ECC 상태 확인 중 오류 발생: {e}")
         finally:
             self.reset_pins()
-    
+
     def _write_full_address(self, page_no: int, col_addr: int = 0):
         """
-        데이터시트 사양에 맞게 5바이트 전체 주소(컬럼+로우)를 조합하여 전송합니다.
-        (최종 수정: 선형 주소 방식 적용)
+        8Gb 모델(MT29F8G)의 데이터시트(Table 4) 사양에 맞게 
+        5바이트 전체 주소(컬럼+로우)를 조합하여 전송합니다.
         """
-        # 1. 5바이트 주소를 담을 리스트 생성
+        page_in_block = page_no % self.PAGES_PER_BLOCK
+        block_no = page_no // self.PAGES_PER_BLOCK
+
+        # 8192개 블록은 13비트(0~12)로 표현됩니다. (2^13 = 8192)
+        # 데이터시트는 이 13개 비트를 BA6 ~ BA18로 매핑합니다.
+        # block_no의 0번째 비트 -> BA6, 12번째 비트 -> BA18
+
         addresses = [0] * 5
 
-        # 2. Cycle 1, 2: Column Address (12비트)
+        # Cycle 1 & 2: Column Address (2바이트)
         addresses[0] = col_addr & 0xFF
-        addresses[1] = (col_addr >> 8) & 0x0F
+        addresses[1] = (col_addr >> 8) & 0x0F # 12비트 컬럼 주소
 
-        # 3. Cycle 3, 4, 5: Row Address (선형 page_no 사용)
-        # page_no를 8비트 단위로 잘라 각 바이트에 할당합니다.
-        addresses[2] = page_no & 0xFF          # Row Addr 1 (PA[7:0])
-        addresses[3] = (page_no >> 8) & 0xFF   # Row Addr 2 (PA[15:8])
-        addresses[4] = (page_no >> 16) & 0xFF  # Row Addr 3 (PA[17:16])
+        # Cycle 3: {BA7, BA6, PA5, PA4, PA3, PA2, PA1, PA0}
+        # block_no의 하위 2비트(BA7, BA6)와 페이지 주소를 조합합니다.
+        addresses[2] = (page_in_block & 0x3F) | ((block_no & 0x03) << 6)
+        
+        # Cycle 4: {BA15, BA14, BA13, BA12, BA11, BA10, BA9, BA8}
+        # block_no의 중간 8비트를 전송합니다.
+        addresses[3] = (block_no >> 2) & 0xFF
+        
+        # Cycle 5: {LOW, LOW, LOW, LOW, LOW, BA18, BA17, BA16}
+        # block_no의 상위 3비트(BA18, BA17, BA16)를 전송합니다.
+        addresses[4] = (block_no >> 10) & 0x07
 
-        # 4. 생성된 5바이트 주소를 전송합니다.
+        # 생성된 5바이트 주소를 전송
         GPIO.output(self.CE, GPIO.LOW)
         self._delay_ns(50)
         GPIO.output(self.CLE, GPIO.LOW)
@@ -1059,20 +1071,24 @@ class MT29F8G08ADADA:
         GPIO.output(self.ALE, GPIO.LOW)
         self._delay_ns(self.tALH)
 
-
     def _write_row_address(self, page_no: int):
         """
-        데이터시트 사양에 맞게 3바이트 Row Address를 조합하여 전송합니다.
-        (최종 수정: 선형 주소 방식 적용)
+        8Gb 모델(MT29F8G)의 데이터시트(Table 4) 사양에 맞게 
+        3바이트 Row Address(블록+페이지)를 조합하여 전송합니다.
         """
-        # 1. Cycle 3, 4, 5에 해당하는 Row Address를 선형 page_no로부터 계산합니다.
+        page_in_block = page_no % self.PAGES_PER_BLOCK
+        block_no = page_no // self.PAGES_PER_BLOCK
+
         row_addresses = [
-            page_no & 0xFF,           # Row Addr 1 (PA[7:0])
-            (page_no >> 8) & 0xFF,    # Row Addr 2 (PA[15:8])
-            (page_no >> 16) & 0xFF   # Row Addr 3 (PA[17:16])
+            # Cycle 3: {BA7, BA6, PA5:PA0}
+            (page_in_block & 0x3F) | ((block_no & 0x03) << 6),
+            # Cycle 4: {BA15:BA8}
+            (block_no >> 2) & 0xFF,
+            # Cycle 5: {BA18, BA17, BA16}
+            (block_no >> 10) & 0x07
         ]
 
-        # 2. 생성된 주소를 전송합니다.
+        # 생성된 주소를 전송
         GPIO.output(self.CE, GPIO.LOW)
         self._delay_ns(50)
         GPIO.output(self.CLE, GPIO.LOW)
@@ -1088,3 +1104,62 @@ class MT29F8G08ADADA:
             
         GPIO.output(self.ALE, GPIO.LOW)
         self._delay_ns(self.tALH)
+    
+
+
+
+
+    
+    def _write_full_address_for_block0(self, page_no: int, col_addr: int = 0):
+        """Block 0 전용: 이전 4Gb 드라이버의 Full Address 계산 방식"""
+        page_in_block = page_no % self.PAGES_PER_BLOCK
+        block_no = page_no // self.PAGES_PER_BLOCK
+        
+        addr1 = col_addr & 0xFF
+        addr2 = (col_addr >> 8) & 0x0F
+        addr3 = (block_no & 0xC0) | page_in_block
+        addr4 = (block_no >> 8) & 0xFF
+        addr5 = (block_no >> 16) & 0xFF
+        addresses = [addr1, addr2, addr3, addr4, addr5]
+
+        GPIO.output(self.CE, GPIO.LOW)
+        GPIO.output(self.CLE, GPIO.LOW)
+        GPIO.output(self.ALE, GPIO.HIGH)
+        self._delay_ns(self.tALS)
+        for addr in addresses:
+            GPIO.output(self.WE, GPIO.LOW); self._delay_ns(self.tWP)
+            self.write_data(addr)
+            GPIO.output(self.WE, GPIO.HIGH); self._delay_ns(self.tWH)
+        GPIO.output(self.ALE, GPIO.LOW)
+        self._delay_ns(self.tALH)
+        self._delay_ns(self.tADL)
+        
+    def write_full_page_for_block0(self, page_no: int, data: bytes):
+        """Block 0의 페이지 0-3 전용 쓰기 메소드"""
+        full_size = self.PAGE_SIZE + self.SPARE_SIZE
+        if len(data) < full_size:
+            data += b'\xFF' * (full_size - len(data))
+
+        try:
+            self.write_command(0x80)
+            # 특수 주소 지정 메소드 호출
+            self._write_full_address_for_block0(page_no)
+            
+            self.set_data_pins_output()
+            GPIO.output(self.CE, GPIO.LOW)
+            GPIO.output(self.CLE, GPIO.LOW)
+            GPIO.output(self.ALE, GPIO.LOW)
+            
+            for byte in data:
+                GPIO.output(self.WE, GPIO.LOW); self._delay_ns(self.tWP)
+                self.write_data(byte)
+                GPIO.output(self.WE, GPIO.HIGH); self._delay_ns(self.tWH)
+            
+            self.write_command(0x10)
+            self.wait_ready()
+            if not self.check_operation_status():
+                raise RuntimeError(f"페이지 {page_no} 특수 쓰기 상태 확인 실패")
+        except Exception as e:
+            raise RuntimeError(f"페이지 {page_no} 특수 쓰기 실패: {e}")
+        finally:
+            self.reset_pins()

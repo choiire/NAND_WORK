@@ -1104,3 +1104,4 @@ class MT29F8G08ADADA:
             
         GPIO.output(self.ALE, GPIO.LOW)
         self._delay_ns(self.tALH)
+    
