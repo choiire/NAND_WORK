@@ -259,7 +259,7 @@ def program_nand(initialize_blocks: bool = False):
         total_files = len(files)
         failed_files_info = []
         
-        BATCH_SIZE = 10
+        # BATCH_SIZE 제거 - 이제 파일을 하나씩 처리
         MAX_RETRIES = 5 # 쓰기와 검증 모두에 사용할 재시도 횟수
         
         start_datetime = datetime.now()
@@ -276,71 +276,63 @@ def program_nand(initialize_blocks: bool = False):
         total_pages_to_process = 0
         successful_pages_count = 0
 
-        for i in range(0, total_files, BATCH_SIZE):
-            batch_files = files[i : i + BATCH_SIZE]
-            current_batch_num = (i // BATCH_SIZE) + 1
-            total_batches = (total_files + BATCH_SIZE - 1) // BATCH_SIZE
+        # 파일을 하나씩 처리
+        for file_index, filename in enumerate(files):
+            print(f"\n.--- 파일 {file_index + 1}/{total_files}: {filename} 처리 중 ---")
             
-            print(f"\n.--- 파일 배치 {current_batch_num}/{total_batches} 처리 중 ({len(batch_files)}개 파일) ---")
+            try:
+                filepath = os.path.join(splits_dir, filename)
+                if os.path.getsize(filepath) == 0:
+                    print(f"경고: 파일이 비어있어 건너뜁니다: {filename}")
+                    continue
 
-            batch_pages_to_write = []
-            for filename in batch_files:
+                with open(filepath, 'rb') as f:
+                    file_data = f.read()
+
+                # 파일 크기 검증 (2112바이트 고정)
+                if len(file_data) != FULL_PAGE_SIZE:
+                    print(f"경고: 파일 크기가 예상과 다릅니다 ({len(file_data)}바이트, 예상: {FULL_PAGE_SIZE}바이트): {filename}")
+
+                start_address = hex_to_int(filename.split('.')[0])
+                page_no = start_address // FULL_PAGE_SIZE
+
+                total_pages_to_process += 1
+                
+                print(f"  [1단계] 쓰기 작업 진행... (페이지 {page_no})")
+                
+                # 페이지 쓰기
+                write_success = False
                 try:
-                    filepath = os.path.join(splits_dir, filename)
-                    if os.path.getsize(filepath) == 0:
-                        print(f"경고: 파일이 비어있어 건너뜁니다: {filename}")
-                        continue
+                    if program_page_only(nand, page_no, file_data, MAX_RETRIES):
+                        write_success = True
+                except Exception as e:
+                    failed_files_info.append({'file': filename, 'reason': str(e)})
+                    print(f"    쓰기 실패: Page {page_no} - {e}")
 
-                    with open(filepath, 'rb') as f:
-                        file_data = f.read()
-
-                    start_address = hex_to_int(filename.split('.')[0])
-                    start_page_no = start_address // FULL_PAGE_SIZE
-
-                    for page_offset, chunk_start in enumerate(range(0, len(file_data), FULL_PAGE_SIZE)):
-                        chunk_data = file_data[chunk_start : chunk_start + FULL_PAGE_SIZE]
-                        current_page_no = start_page_no + page_offset
+                # 검증 단계
+                if write_success:
+                    print(f"  [2단계] 검증 작업 진행... (페이지 {page_no})")
+                    page_info = {
+                        'filename': filename,
+                        'page_no': page_no,
+                        'data': file_data
+                    }
+                    verification_results = verify_pages_batch(nand, [page_info], MAX_RETRIES)
+                    
+                    if verification_results['success']:
+                        successful_pages_count += 1
+                        print(f"  파일 완료: 성공")
+                    else:
+                        failed_info = verification_results['failed'][0]
+                        failed_files_info.append({'file': filename, 'reason': failed_info['error']})
+                        print(f"    검증 실패: Page {page_no} - {failed_info['error']}")
+                        print(f"  파일 완료: 실패")
+                else:
+                    print(f"  파일 완료: 쓰기 실패")
                         
-                        batch_pages_to_write.append({
-                            'filename': filename,
-                            'page_no': current_page_no,
-                            'data': chunk_data, # <--- 이제 chunk_data를 직접 전달
-                        })
-                except Exception as e:
-                    failed_files_info.append({'file': filename, 'reason': f"파일 준비 중 오류: {e}"})
-
-            total_pages_to_process += len(batch_pages_to_write)
-            
-            written_pages_for_verify = []
-            print("  [1단계] 쓰기 작업 진행...")
-            
-            # 현재 처리 중인 파일을 추적하기 위한 변수
-            current_processing_file = None
-            
-            for page_info in batch_pages_to_write:
-                # 새로운 파일이 시작될 때만 파일명 출력
-                if current_processing_file != page_info['filename']:
-                    current_processing_file = page_info['filename']
-                    print(f"    처리 중: {current_processing_file}")
-                
-                try:
-                    if program_page_only(nand, page_info['page_no'], page_info['data'], MAX_RETRIES):
-                        written_pages_for_verify.append(page_info)
-                        # 성공 메시지 제거 - 더 이상 출력하지 않음
-                except Exception as e:
-                    failed_files_info.append({'file': page_info['filename'], 'reason': str(e)})
-                    print(f"    쓰기 실패: Page {page_info['page_no']} (파일: {page_info['filename']}) - {e}")
-
-            if written_pages_for_verify:
-                print(f"  [2단계] 검증 작업 진행 ({len(written_pages_for_verify)}개 페이지)...")
-                # --- 개선 제안 반영: MAX_RETRIES 상수 전달 ---
-                verification_results = verify_pages_batch(nand, written_pages_for_verify, MAX_RETRIES)
-                
-                successful_pages_count += len(verification_results['success'])
-
-                for failed_info in verification_results['failed']:
-                    failed_files_info.append({'file': failed_info['filename'], 'reason': failed_info['error']})
-                    print(f"    검증 실패: Page {failed_info['page_no']} (파일: {failed_info['filename']})")
+            except Exception as e:
+                failed_files_info.append({'file': filename, 'reason': f"파일 처리 중 오류: {e}"})
+                print(f"  파일 처리 실패: {filename} - {e}")
         
         end_datetime = datetime.now()
         duration = end_datetime - start_datetime
