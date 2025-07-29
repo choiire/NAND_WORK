@@ -41,10 +41,37 @@ def format_hex_output(data: bytes, bytes_per_line: int = 16) -> str:
     
     return "\n".join(lines)
 
+def format_hex_output_with_offset(data: bytes, offset: int = 0, bytes_per_line: int = 16) -> str:
+    """바이트 데이터를 지정된 오프셋부터 시작하는 16진수 형태로 포맷팅합니다."""
+    lines = []
+    
+    for i in range(0, len(data), bytes_per_line):
+        chunk = data[i:i + bytes_per_line]
+        
+        # 주소 표시 (지정된 오프셋부터 시작)
+        addr = f"{offset + i:08X}"
+        
+        # 16진수 바이트들
+        hex_bytes = " ".join(f"{b:02X}" for b in chunk)
+        
+        # ASCII 문자 (출력 가능한 문자만)
+        ascii_chars = ""
+        for b in chunk:
+            if 32 <= b <= 126:  # 출력 가능한 ASCII 문자
+                ascii_chars += chr(b)
+            else:
+                ascii_chars += "."
+        
+        # 라인 포맷: 주소 | 16진수 바이트들 | ASCII 문자들
+        line = f"{addr}  {hex_bytes:<47} |{ascii_chars}|"
+        lines.append(line)
+    
+    return "\n".join(lines)
+
 def verify_block_erased(nand: MT29F4G08ABADAWP, block_no: int) -> bool:
     """블록이 제대로 삭제되었는지 확인합니다 (모든 바이트가 0xFF인지 확인)."""
     PAGES_PER_BLOCK = 64
-    PAGE_SIZE = 2048
+    FULL_PAGE_SIZE = 2112  # 메인 영역 2048 + 스페어 영역 64
     
     print(f"블록 {block_no} 삭제 검증 중...")
     
@@ -53,14 +80,14 @@ def verify_block_erased(nand: MT29F4G08ABADAWP, block_no: int) -> bool:
         first_page = block_no * PAGES_PER_BLOCK
         last_page = first_page + PAGES_PER_BLOCK - 1
         
-        # 첫 페이지 확인
-        first_data = nand.read_page(first_page, PAGE_SIZE)
+        # 첫 페이지 확인 (전체 페이지 포함 스페어 영역)
+        first_data = nand.read_page(first_page, FULL_PAGE_SIZE)
         if not all(b == 0xFF for b in first_data):
             print(f"❌ 첫 페이지 삭제 실패 - 0xFF가 아닌 데이터 발견")
             return False
         
-        # 마지막 페이지 확인
-        last_data = nand.read_page(last_page, PAGE_SIZE)
+        # 마지막 페이지 확인 (전체 페이지 포함 스페어 영역)
+        last_data = nand.read_page(last_page, FULL_PAGE_SIZE)
         if not all(b == 0xFF for b in last_data):
             print(f"❌ 마지막 페이지 삭제 실패 - 0xFF가 아닌 데이터 발견")
             return False
@@ -108,27 +135,39 @@ def main():
         print(f"\n📖 블록 {block_no}의 첫 페이지 (페이지 {first_page}) 데이터 읽기 중...")
         
         start_time = time.time()
-        # 전체 페이지 크기 (2048 바이트) 읽기
-        page_data = nand.read_page(first_page, 2048)
+        # 전체 페이지 크기 (2112 바이트 = 메인 2048 + 스페어 64) 읽기
+        page_data = nand.read_page(first_page, 2112)
         read_time = time.time() - start_time
         
         print(f"✅ 페이지 데이터 읽기 완료 (소요 시간: {read_time:.3f}초)")
-        print(f"📊 읽은 데이터 크기: {len(page_data)} 바이트")
+        print(f"📊 읽은 데이터 크기: {len(page_data)} 바이트 (메인 영역: 2048, 스페어 영역: 64)")
         
         # 16진수 출력
-        print(f"\n" + "=" * 70)
-        print(f"블록 {block_no}, 페이지 {first_page} 데이터 (16진수 출력)")
-        print("=" * 70)
+        print(f"\n" + "=" * 80)
+        print(f"블록 {block_no}, 페이지 {first_page} 데이터 (16진수 출력) - 전체 2112 바이트")
+        print("=" * 80)
         print("주소     : 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  |ASCII 문자|")
-        print("-" * 70)
+        print("-" * 80)
         
-        hex_output = format_hex_output(page_data)
-        print(hex_output)
+        # 메인 영역과 스페어 영역을 구분해서 표시
+        main_area = page_data[:2048]
+        spare_area = page_data[2048:2112]
+        
+        print("🔵 메인 영역 (0x000000 - 0x0007FF, 2048 바이트):")
+        print("-" * 60)
+        hex_output_main = format_hex_output(main_area)
+        print(hex_output_main)
+        
+        print(f"\n🟡 스페어 영역 (0x000800 - 0x00083F, 64 바이트):")
+        print("-" * 60)
+        # 스페어 영역은 오프셋을 2048부터 시작하도록 조정
+        hex_output_spare = format_hex_output_with_offset(spare_area, offset=2048)
+        print(hex_output_spare)
         
         # 데이터 통계
-        print("\n" + "=" * 70)
+        print("\n" + "=" * 80)
         print("📈 데이터 통계")
-        print("=" * 70)
+        print("=" * 80)
         
         # 바이트 값별 개수 계산
         byte_counts = {}
