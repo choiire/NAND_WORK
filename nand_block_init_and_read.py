@@ -148,12 +148,36 @@ def main():
     print("NAND 블록 초기화, 파일 쓰기 및 데이터 검증 프로그램")
     print("=" * 80)
     
-    # NAND 드라이버 초기화
+    # NAND 드라이버 초기화 및 설정
     print("\n🔧 NAND 드라이버 초기화 중...")
     try:
         # Bad Block 스캔을 건너뛰고 빠르게 초기화
         nand = MT29F4G08ABADAWP(skip_bad_block_scan=True)
-        print("✅ NAND 드라이버 초기화 완료")
+        print("✅ NAND 드라이버 기본 초기화 완료")
+        
+        # 파워온 시퀀스 재실행 (안정성 확보)
+        print("\n⚡ NAND 칩 파워온 시퀀스 실행 중...")
+        nand.power_on_sequence()
+        print("✅ 파워온 시퀀스 완료")
+        
+        # 내부 ECC 상태 확인
+        print("\n🔍 현재 ECC 상태 확인 중...")
+        nand.check_ecc_status()
+        
+        # 내부 ECC 비활성화
+        print("\n🔧 내부 ECC 비활성화 중...")
+        ecc_disable_success = nand.disable_internal_ecc()
+        if ecc_disable_success:
+            print("✅ 내부 ECC 비활성화 완료")
+        else:
+            print("⚠️  내부 ECC 비활성화에 실패했지만 계속 진행합니다...")
+        
+        # ECC 비활성화 후 상태 재확인
+        print("\n🔍 ECC 비활성화 후 상태 재확인...")
+        nand.check_ecc_status()
+        
+        print("✅ NAND 칩 초기화 및 설정 완료")
+        
     except Exception as e:
         print(f"❌ NAND 드라이버 초기화 실패: {str(e)}")
         sys.exit(1)
