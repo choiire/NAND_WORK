@@ -1,6 +1,8 @@
 import RPi.GPIO as GPIO
 import time
 
+#1
+
 class MT29F4G08ABADAWP:
     # NAND 플래시 상수
     PAGE_SIZE = 2048
