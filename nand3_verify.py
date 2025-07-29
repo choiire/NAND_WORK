@@ -31,7 +31,7 @@ def verify_nand_sequential(input_filepath: str):
             raise FileNotFoundError(f"입력 파일 없음: {input_filepath}")
         
         expected_size = os.path.getsize(input_filepath)
-        total_blocks_to_process = expected_size // (nand.PAGE_SIZE * nand.PAGES_PER_BLOCK)
+        total_blocks_to_process = nand.TOTAL_BLOCKS
         
         # 2. output.bin 파일이 있다면 삭제
         if os.path.exists(output_filepath):
@@ -44,7 +44,28 @@ def verify_nand_sequential(input_filepath: str):
         # 3. 블록 단위로 NAND 읽기 -> output.bin에 쓰기
         with open(output_filepath, 'ab') as f_out:
             for block in range(total_blocks_to_process):
-                sys.stdout.write(f"\r블록 처리 중: {block + 1}/{total_blocks_to_process}")
+                # 진행률 및 예상 완료 시간 계산
+                current_time = datetime.now()
+                elapsed_time = current_time - start_time
+                progress = (block + 1) / total_blocks_to_process
+                
+                if progress > 0:
+                    estimated_total_time = elapsed_time / progress
+                    remaining_time = estimated_total_time - elapsed_time
+                    
+                    # 남은 시간을 시:분:초 형태로 변환
+                    remaining_seconds = int(remaining_time.total_seconds())
+                    hours, remainder = divmod(remaining_seconds, 3600)
+                    minutes, seconds = divmod(remainder, 60)
+                    
+                    if hours > 0:
+                        time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                    else:
+                        time_str = f"{minutes:02d}:{seconds:02d}"
+                    
+                    sys.stdout.write(f"\r블록 처리 중: {block + 1}/{total_blocks_to_process} ({progress*100:.1f}%) - 남은 시간: {time_str}")
+                else:
+                    sys.stdout.write(f"\r블록 처리 중: {block + 1}/{total_blocks_to_process}")
                 sys.stdout.flush()
 
                 # [수정] Bad Block 건너뛰기 로직 삭제
