@@ -1,12 +1,12 @@
 import os
 import sys
 from datetime import datetime
-from nand_driver import MT29F8G08ADADA
+from nand_driver import MT29F4G08ADADA
 import time
 
 # --- 새로운 상수 정의 ---
-FULL_PAGE_SIZE = MT29F8G08ADADA.PAGE_SIZE + MT29F8G08ADADA.SPARE_SIZE # 2112 바이트
-#PAGE_SIZE = MT29F8G08ADADA.PAGE_SIZE
+FULL_PAGE_SIZE = MT29F4G08ADADA.PAGE_SIZE + MT29F4G08ADADA.SPARE_SIZE # 2112 바이트
+#PAGE_SIZE = MT29F4G08ADADA.PAGE_SIZE
 
 def hex_to_int(hex_str: str) -> int:
     """16진수 문자열을 정수로 변환"""
@@ -231,7 +231,7 @@ def program_nand(initialize_blocks: bool = False):
     """NAND 플래시 프로그래밍 (Block 0는 ECC 활성화, 나머지는 비활성화)"""
     try:
         print("NAND 플래시 드라이버 초기화 중...")
-        nand = MT29F8G08ADADA()
+        nand = MT29F4G08ADADA()
         
         # --- 👇 여기부터 수정 ---
 

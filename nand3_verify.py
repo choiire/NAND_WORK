@@ -4,7 +4,7 @@ import time
 import hashlib
 import pickle
 from datetime import datetime
-from nand_driver import MT29F8G08ADADA
+from nand_driver import MT29F4G08ADADA
 
 def calculate_file_hash(filepath: str) -> str:
     """파일의 SHA256 해시를 계산합니다."""
@@ -26,7 +26,7 @@ def verify_nand_sequential(input_filepath: str):
     
     try:
         print("NAND 드라이버 초기화 중 (공장 Bad Block 스캔)...")
-        nand = MT29F8G08ADADA()
+        nand = MT29F4G08ADADA()
         
         # 1. 입력 파일 유효성 검사
         if not os.path.exists(input_filepath):

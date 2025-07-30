@@ -3,7 +3,7 @@ import time
 
 #2
 
-class MT29F8G08ADADA:
+class MT29F4G08ADADA:
     # NAND 플래시 상수
     PAGE_SIZE = 2048
     SPARE_SIZE = 64
