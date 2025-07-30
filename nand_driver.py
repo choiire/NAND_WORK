@@ -8,7 +8,7 @@ class MT29F8G08ADADA:
     PAGE_SIZE = 2048
     SPARE_SIZE = 64
     PAGES_PER_BLOCK = 64
-    TOTAL_BLOCKS = 8192
+    TOTAL_BLOCKS = 4096 # <<< 8192에서 4096으로 변경
     
     # 타이밍 상수 (ns) - 데이터시트의 Max/Min 값과 충분한 여유를 고려하여 재조정
     # 라즈베리 파이 Python GPIO 제어의 비결정성(non-determinism)을 감안하여 더 큰 값으로 설정
@@ -1026,15 +1026,15 @@ class MT29F8G08ADADA:
 
     def _write_full_address(self, page_no: int, col_addr: int = 0):
         """
-        8Gb 모델(MT29F8G)의 데이터시트(Table 4) 사양에 맞게 
+        4Gb 모델(MT29F4G)의 데이터시트(Table 2) 사양에 맞게 
         5바이트 전체 주소(컬럼+로우)를 조합하여 전송합니다.
         """
         page_in_block = page_no % self.PAGES_PER_BLOCK
         block_no = page_no // self.PAGES_PER_BLOCK
 
-        # 8192개 블록은 13비트(0~12)로 표현됩니다. (2^13 = 8192)
-        # 데이터시트는 이 13개 비트를 BA6 ~ BA18로 매핑합니다.
-        # block_no의 0번째 비트 -> BA6, 12번째 비트 -> BA18
+        # 4096개 블록은 12비트(0~11)로 표현됩니다. (2^12 = 4096)
+        # 데이터시트는 이 12개 비트를 BA6 ~ BA17로 매핑합니다.
+        # block_no의 0번째 비트 -> BA6, 11번째 비트 -> BA17
 
         addresses = [0] * 5
 
@@ -1050,9 +1050,10 @@ class MT29F8G08ADADA:
         # block_no의 중간 8비트를 전송합니다.
         addresses[3] = (block_no >> 2) & 0xFF
         
-        # Cycle 5: {LOW, LOW, LOW, LOW, LOW, BA18, BA17, BA16}
-        # block_no의 상위 3비트(BA18, BA17, BA16)를 전송합니다.
-        addresses[4] = (block_no >> 10) & 0x07
+        # Cycle 5: {LOW, LOW, LOW, LOW, LOW, LOW, BA17, BA16}
+        # block_no의 상위 2비트(BA17, BA16)를 전송합니다.
+        # 8Gb의 (>> 10) & 0x07 에서 4Gb에 맞게 (>> 10) & 0x03으로 수정
+        addresses[4] = (block_no >> 10) & 0x03
 
         # 생성된 5바이트 주소를 전송
         GPIO.output(self.CE, GPIO.LOW)
@@ -1073,7 +1074,7 @@ class MT29F8G08ADADA:
 
     def _write_row_address(self, page_no: int):
         """
-        8Gb 모델(MT29F8G)의 데이터시트(Table 4) 사양에 맞게 
+        4Gb 모델(MT29F4G)의 데이터시트(Table 2) 사양에 맞게 
         3바이트 Row Address(블록+페이지)를 조합하여 전송합니다.
         """
         page_in_block = page_no % self.PAGES_PER_BLOCK
@@ -1084,8 +1085,9 @@ class MT29F8G08ADADA:
             (page_in_block & 0x3F) | ((block_no & 0x03) << 6),
             # Cycle 4: {BA15:BA8}
             (block_no >> 2) & 0xFF,
-            # Cycle 5: {BA18, BA17, BA16}
-            (block_no >> 10) & 0x07
+            # Cycle 5: {BA17, BA16}
+            # 8Gb의 (>> 10) & 0x07 에서 4Gb에 맞게 (>> 10) & 0x03으로 수정
+            (block_no >> 10) & 0x03
         ]
 
         # 생성된 주소를 전송
@@ -1104,4 +1106,3 @@ class MT29F8G08ADADA:
             
         GPIO.output(self.ALE, GPIO.LOW)
         self._delay_ns(self.tALH)
-    

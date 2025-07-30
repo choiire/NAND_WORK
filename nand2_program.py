@@ -18,7 +18,7 @@ def hex_to_int(hex_str: str) -> int:
 def calculate_page_number(address: int) -> int:
     """주소를 페이지 번호로 변환"""
     page_no = address // FULL_PAGE_SIZE # 주소 계산의 기준을 전체 페이지 크기로 변경
-    if page_no >= 8192 * 64:
+    if page_no >= 4096 * 64: # <<< 8192에서 4096으로 변경
         raise ValueError(f"유효하지 않은 페이지 번호: {page_no}")
     return page_no
 
@@ -58,7 +58,7 @@ def get_two_plane_pairs(total_blocks: int) -> tuple:
 
 def erase_all_blocks_fast(nand):
     """검증 없이 모든 블록을 빠르게 초기화합니다 (Two-plane 기능 사용)"""
-    TOTAL_BLOCKS = 8192
+    TOTAL_BLOCKS = 4096 # <<< 8192에서 4096으로 변경
     PAGES_PER_BLOCK = 64
     
     try:
@@ -273,7 +273,7 @@ def program_nand(initialize_blocks: bool = False):
         print(f"\n{'.='*60}")
         print(f" NAND 플래시 프로그래밍 시작 (Block 0 ECC 처리 포함)")
         print(f"{'.='*60}")
-        print(f"시작 시간: {start_datetime.strftime('%Y-%m-%d %H%M:%S')}")
+        print(f"시작 시간: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"총 파일 수: {total_files}개")
         print(f"오류 로그: {error_log_filename}")
         print(".=" * 60)
@@ -359,7 +359,7 @@ def program_nand(initialize_blocks: bool = False):
         failed_pages_count = len(failed_files_info)
 
         print(f".=== NAND 플래시 프로그래밍 완료 ===")
-        print(f"완료 시간: {end_datetime.strftime('%Y-%m-%d %H%M:%S')}")
+        print(f"완료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"소요 시간: {duration}")
         print(f"\n총 처리 시도 페이지 수: {total_pages_to_process}")
         print(f"성공: {successful_pages_count}")
