@@ -96,7 +96,7 @@ def verify_block(nand, block_no: int, pages_to_check: list = None) -> dict:
     }
 
 def verify_block_initialization(nand, block_no: int, verification_level: str = "quick") -> dict:
-    """블록 초기화 상태를 다양한 수준으로 검증 (블록 0는 ECC 활성화)
+    """블록 초기화 상태를 다양한 수준으로 검증 (ECC는 외부에서 관리)
     
     Args:
         nand: NAND 드라이버 인스턴스
@@ -113,27 +113,6 @@ def verify_block_initialization(nand, block_no: int, verification_level: str = "
     PAGE_SIZE = 2048
     block_start_page = block_no * PAGES_PER_BLOCK
     
-    # 블록 0 검증 시에만 ECC 활성화
-    is_block_0 = (block_no == 0)
-    ecc_changed = False
-    
-    # ECC 상태 설정
-    if is_block_0:
-        print(f"\n  [INFO] 블록 0 검증을 위해 ECC 활성화 중...")
-        if nand.enable_internal_ecc():
-            ecc_changed = True
-            print(f"  [INFO] ECC 활성화 완료")
-        else:
-            print(f"  [WARNING] ECC 활성화 실패, 계속 진행...")
-    else:
-        # 블록 1 이상에서는 ECC 비활성화 확인
-        print(f"\n  [INFO] 블록 {block_no} 검증을 위해 ECC 비활성화 중...")
-        if nand.disable_internal_ecc():
-            ecc_changed = True
-            print(f"  [INFO] ECC 비활성화 완료")
-        else:
-            print(f"  [WARNING] ECC 비활성화 실패, 계속 진행...")
-    
     try:
         if verification_level == "quick":
             # 기존 방식: 첫/마지막 페이지의 첫 바이트만
@@ -144,17 +123,12 @@ def verify_block_initialization(nand, block_no: int, verification_level: str = "
             last_byte = last_page_data[0] if last_page_data else 0x00
             
             if first_byte != 0xFF or last_byte != 0xFF:
-                result = {
+                return {
                     'success': False,
                     'level': 'quick',
                     'error': f'첫 바이트: 0x{first_byte:02X}, 마지막 바이트: 0x{last_byte:02X}',
                     'coverage': '2 bytes / 131072 bytes (0.0015%)'
                 }
-                # ECC 상태 복원 후 반환
-                if ecc_changed and is_block_0:
-                    print(f"  [INFO] 블록 0 검증 완료, ECC 비활성화 중...")
-                    nand.disable_internal_ecc()
-                return result
                 
         elif verification_level == "sample":
             # 샘플링 방식: 여러 페이지의 여러 위치 확인
@@ -181,18 +155,13 @@ def verify_block_initialization(nand, block_no: int, verification_level: str = "
                             })
             
             if errors:
-                result = {
+                return {
                     'success': False,
                     'level': 'sample',
                     'errors': errors[:5],  # 최대 5개 오류만 반환
                     'total_errors': len(errors),
                     'coverage': f'{total_checked} bytes / 131072 bytes ({(total_checked/131072)*100:.2f}%)'
                 }
-                # ECC 상태 복원 후 반환
-                if ecc_changed and is_block_0:
-                    print(f"  [INFO] 블록 0 검증 완료, ECC 비활성화 중...")
-                    nand.disable_internal_ecc()
-                return result
                 
         elif verification_level == "full":
             # 전체 확인: 모든 페이지의 모든 바이트 확인
@@ -215,32 +184,22 @@ def verify_block_initialization(nand, block_no: int, verification_level: str = "
                         
                         # 너무 많은 오류가 발견되면 조기 종료
                         if len(errors) >= 100:
-                            result = {
+                            return {
                                 'success': False,
                                 'level': 'full',
                                 'errors': errors[:10],  # 처음 10개만 반환
                                 'total_errors': f'{len(errors)}+ (조기 종료)',
                                 'coverage': f'{total_checked} bytes / 131072 bytes (조기 종료)'
                             }
-                            # ECC 상태 복원 후 반환
-                            if ecc_changed and is_block_0:
-                                print(f"  [INFO] 블록 0 검증 완료, ECC 비활성화 중...")
-                                nand.disable_internal_ecc()
-                            return result
             
             if errors:
-                result = {
+                return {
                     'success': False,
                     'level': 'full',
                     'errors': errors[:10],  # 최대 10개 오류만 반환
                     'total_errors': len(errors),
                     'coverage': f'{total_checked} bytes / 131072 bytes (100%)'
                 }
-                # ECC 상태 복원 후 반환
-                if ecc_changed and is_block_0:
-                    print(f"  [INFO] 블록 0 검증 완료, ECC 비활성화 중...")
-                    nand.disable_internal_ecc()
-                return result
         
         # 성공한 경우
         coverage_info = {
@@ -249,23 +208,13 @@ def verify_block_initialization(nand, block_no: int, verification_level: str = "
             "full": "131072 bytes / 131072 bytes (100%)"
         }
         
-        result = {
+        return {
             'success': True,
             'level': verification_level,
             'coverage': coverage_info[verification_level]
         }
         
-        # ECC 상태 복원 후 반환
-        if ecc_changed and is_block_0:
-            print(f"  [INFO] 블록 0 검증 완료, ECC 비활성화 중...")
-            nand.disable_internal_ecc()
-        return result
-        
     except Exception as e:
-        # 예외 발생 시에도 ECC 상태 복원
-        if ecc_changed and is_block_0:
-            print(f"  [INFO] 블록 0 검증 중 예외 발생, ECC 비활성화 중...")
-            nand.disable_internal_ecc()
         return {
             'success': False,
             'level': verification_level,
@@ -331,7 +280,7 @@ def get_two_plane_pairs_from_list(block_list: list) -> (list, list):
     return pairs, remaining_blocks
 
 def scan_bad_blocks_after_erase(nand: MT29F4G08ADADA):
-    """삭제 후 Bad Block 스캔 (블록 0는 ECC 활성화)"""
+    """삭제 후 Bad Block 스캔 (모든 블록에서 ECC 활성화)"""
     TOTAL_BLOCKS = 4096
     PAGES_PER_BLOCK = 64
     
@@ -339,8 +288,9 @@ def scan_bad_blocks_after_erase(nand: MT29F4G08ADADA):
     new_bad_blocks = []
     MAX_RETRIES = 3
     
-    # ECC 상태 추적 변수
-    current_ecc_enabled = False
+    # 스캔 시작 전 ECC 활성화
+    print("Bad Block 스캔을 위해 ECC 활성화 중...")
+    nand.enable_internal_ecc()
     
     for block in range(TOTAL_BLOCKS):
         # 진행 상황 표시 (100블록마다)
@@ -349,18 +299,6 @@ def scan_bad_blocks_after_erase(nand: MT29F4G08ADADA):
             sys.stdout.flush()
         
         page = block * PAGES_PER_BLOCK
-        
-        # 블록 0 스캔 시 ECC 활성화, 그 외에는 비활성화
-        if block == 0 and not current_ecc_enabled:
-            print(f"\n  [INFO] 블록 0 스캔을 위해 ECC 활성화 중...")
-            if nand.enable_internal_ecc():
-                current_ecc_enabled = True
-                print(f"  [INFO] ECC 활성화 완료")
-        elif block == 1 and current_ecc_enabled:
-            print(f"\n  [INFO] 블록 1 이상 스캔을 위해 ECC 비활성화 중...")
-            if nand.disable_internal_ecc():
-                current_ecc_enabled = False
-                print(f"  [INFO] ECC 비활성화 완료")
         
         try:
             # 첫 페이지와 마지막 페이지의 첫 바이트 확인
@@ -400,6 +338,12 @@ def scan_bad_blocks_after_erase(nand: MT29F4G08ADADA):
             })
     
     print(f"\n\nBad Block 스캔 완료.")
+    
+    # 스캔 완료 후 ECC 비활성화
+    print(f"스캔 완료, ECC 비활성화 중...")
+    nand.disable_internal_ecc()
+    print(f"ECC 비활성화 완료")
+    
     print(f"새로 발견된 Bad Block: {len(new_bad_blocks)}개")
     if new_bad_blocks:
         print("Bad Block 목록:")
@@ -478,6 +422,11 @@ def erase_and_verify_blocks_two_plane(nand: MT29F4G08ADADA, verification_level: 
         print(f"검증 방식: {verification_info[verification_level]}")
         scan_start_time = datetime.now()
 
+        # 검증 시작 전 ECC 활성화
+        print(f"검증을 위해 ECC 활성화 중...")
+        nand.enable_internal_ecc()
+        print(f"ECC 활성화 완료")
+
         for block in failed_blocks_erase: nand.mark_bad_block(block)
         
         data_corruption_blocks = []
@@ -486,26 +435,9 @@ def erase_and_verify_blocks_two_plane(nand: MT29F4G08ADADA, verification_level: 
         if verification_level == "full":
             verify_pairs, verify_singles = get_two_plane_pairs_from_list(successful_blocks_erase)
             
-            # ECC 상태 추적 변수
-            current_ecc_enabled = False
-            
             for i, (block1, block2) in enumerate(verify_pairs):
                 sys.stdout.write(f"\rTwo-plane 검증 진행: {(i + 1) / len(verify_pairs) * 100:.1f}%")
                 sys.stdout.flush()
-                
-                # 블록 0 포함 여부 확인 및 ECC 상태 관리
-                has_block_0 = (block1 == 0 or block2 == 0)
-                
-                if has_block_0 and not current_ecc_enabled:
-                    print(f"\n  [INFO] 블록 0 포함 Two-plane 검증을 위해 ECC 활성화 중...")
-                    if nand.enable_internal_ecc():
-                        current_ecc_enabled = True
-                        print(f"  [INFO] ECC 활성화 완료")
-                elif not has_block_0 and current_ecc_enabled:
-                    print(f"\n  [INFO] 블록 0 이외 Two-plane 검증을 위해 ECC 비활성화 중...")
-                    if nand.disable_internal_ecc():
-                        current_ecc_enabled = False
-                        print(f"  [INFO] ECC 비활성화 완료")
                 
                 for page_offset in range(PAGES_PER_BLOCK):
                     page1 = block1 * PAGES_PER_BLOCK + page_offset
@@ -517,11 +449,6 @@ def erase_and_verify_blocks_two_plane(nand: MT29F4G08ADADA, verification_level: 
                     if not all(b == 0xFF for b in d2):
                         data_corruption_blocks.append(block2)
                         break
-            
-            # Two-plane 검증 완료 후 ECC 비활성화
-            if current_ecc_enabled:
-                print(f"\n  [INFO] Two-plane 검증 완료, ECC 비활성화 중...")
-                nand.disable_internal_ecc()
             
             for block in verify_singles:
                 res = verify_block_initialization(nand, block, "full")
@@ -538,6 +465,11 @@ def erase_and_verify_blocks_two_plane(nand: MT29F4G08ADADA, verification_level: 
             print(f"\n데이터 손상 블록 발견: 블록 {block}")
         
         print("\n초기화 검증 완료.")
+        
+        # 검증 완료 후 ECC 비활성화
+        print(f"검증 완료, ECC 비활성화 중...")
+        nand.disable_internal_ecc()
+        print(f"ECC 비활성화 완료")
         
         # --- 최종 결과 출력 및 로그 저장 (기존 로직 유지) ---
         scan_end_time = datetime.now()
