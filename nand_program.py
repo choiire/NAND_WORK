@@ -283,7 +283,10 @@ def program_nand(initialize_blocks: bool = False):
 
         # 파일을 하나씩 처리
         for file_index, filename in enumerate(files):
-            sys.stdout.write(f"\r파일 {file_index + 1}/{total_files}: {filename} 처리 중...")
+            # 진행률 계산 및 표시
+            progress_percent = (file_index / total_files) * 100
+            
+            sys.stdout.write(f"\r[{progress_percent:5.1f}%] 파일 {file_index + 1}/{total_files}: {filename[:30]}...")
             sys.stdout.flush()
             
             try:
@@ -351,7 +354,9 @@ def program_nand(initialize_blocks: bool = False):
                 failed_files_info.append({'file': filename, 'reason': f"파일 처리 중 오류: {e}"})
                 print(f"\n  파일 처리 실패: {filename} - {e}")
         
-        print("\n")
+        # 최종 진행률 100% 표시
+        print(f"\r[100.0%] 모든 파일 처리 완료! ({total_files}/{total_files})")
+        print("")
         
         end_datetime = datetime.now()
         duration = end_datetime - start_datetime
@@ -361,6 +366,7 @@ def program_nand(initialize_blocks: bool = False):
         print(f".=== NAND 플래시 프로그래밍 완료 ===")
         print(f"완료 시간: {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"소요 시간: {duration}")
+        print(f"처리 속도: {total_files / duration.total_seconds():.2f} 파일/초" if duration.total_seconds() > 0 else "처리 속도: N/A")
         print(f"\n총 처리 시도 페이지 수: {total_pages_to_process}")
         print(f"성공: {successful_pages_count}")
         print(f"실패: {failed_pages_count}")

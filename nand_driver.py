@@ -8,7 +8,7 @@ class MT29F8G08ADADA:
     PAGE_SIZE = 2048
     SPARE_SIZE = 64
     PAGES_PER_BLOCK = 64
-    TOTAL_BLOCKS = 4096 # <<< 8192에서 4096으로 변경
+    TOTAL_BLOCKS = 4096
     
     # 타이밍 상수 (ns) - 데이터시트의 Max/Min 값과 충분한 여유를 고려하여 재조정
     # 라즈베리 파이 Python GPIO 제어의 비결정성(non-determinism)을 감안하여 더 큰 값으로 설정
